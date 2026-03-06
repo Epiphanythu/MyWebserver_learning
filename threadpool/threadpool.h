@@ -97,6 +97,7 @@ void *threadpool<T>::worker(void *arg)
     return pool;
 }
 template <typename T>
+//线程池运行函数，不断从工作队列中取出任务并执行之
 void threadpool<T>::run()
 {
     while (true)
@@ -113,18 +114,21 @@ void threadpool<T>::run()
         m_queuelocker.unlock();
         if (!request)
             continue;
+        // reactor模式
         if (1 == m_actor_model)
         {
+            // 状态0： 读事件；状态1：写事件
             if (0 == request->m_state)
             {
                 if (request->read_once())
                 {
-                    request->improv = 1;
-                    connectionRAII mysqlcon(&request->mysql, m_connPool);
-                    request->process();
+                    request->improv = 1; //标记读事件已经就绪
+                    connectionRAII mysqlcon(&request->mysql, m_connPool); //从连接池中取一个连接
+                    request->process(); //处理读事件
                 }
                 else
                 {
+                    // 读事件没有就绪，标记请求需要关闭
                     request->improv = 1;
                     request->timer_flag = 1;
                 }
