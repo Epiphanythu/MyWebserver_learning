@@ -136,6 +136,31 @@ Demo演示
 	* FireFox
 	* 其他浏览器暂无测试
 
+* MySQL从零开始配置（如已安装可跳过）
+    * 安装MySQL
+        ```bash
+        sudo apt update
+        sudo apt install mysql-server
+        ```
+    * 启动MySQL服务
+        ```bash
+        sudo service mysql start
+        ```
+    * 登录MySQL（默认root无密码）
+        ```bash
+        sudo mysql -u root
+        ```
+    * 为root设置密码认证（MySQL 8.0默认使用socket认证，需修改为密码认证）
+        ```sql
+        ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';
+        FLUSH PRIVILEGES;
+        exit;
+        ```
+    * 测试连接
+        ```bash
+        mysql -u root -proot -e "SELECT 1;"
+        ```
+
 * 测试前确认已安装MySQL数据库
 
     ```C++
@@ -173,11 +198,42 @@ Demo演示
     ```C++
     ./server
     ```
+* 关闭服务器
+
+    ```C++
+    pkill -f server
+    ```
+
+* 常用检查命令
+
+    ```bash
+    # 查看服务器进程
+    pgrep -f server
+    ps aux | grep server
+
+    # 检查端口是否监听
+    ss -tlnp | grep 9006
+
+    # 获取本机IP地址
+    hostname -I | awk '{print $1}'
+    ip a
+
+    # 查看服务器日志
+    tail -f 2026_03_06_ServerLog
+
+    # 测试MySQL连接
+    mysql -u root -proot -e "SELECT 1;"
+
+    # 查看MySQL中的用户表
+    mysql -u root -proot -e "USE yourdb; SELECT * FROM user;"
+    ```
 
 * 浏览器端
 
     ```C++
     ip:9006
+    本机：http://localhost:9006                                                              
+    其他设备：http://<你的IP>:9006  
     ```
 
 个性化运行
@@ -257,8 +313,4 @@ CPP11实现
 更简洁，更优雅的CPP11实现：[Webserver](https://github.com/markparticle/WebServer)
 
 
-致谢
-------------
-Linux高性能服务器编程，游双著.
 
-感谢以下朋友的PR和帮助: [@RownH](https://github.com/RownH)，[@mapleFU](https://github.com/mapleFU)，[@ZWiley](https://github.com/ZWiley)，[@zjuHong](https://github.com/zjuHong)，[@mamil](https://github.com/mamil)，[@byfate](https://github.com/byfate)，[@MaJun827](https://github.com/MaJun827)，[@BBLiu-coder](https://github.com/BBLiu-coder)，[@smoky96](https://github.com/smoky96)，[@yfBong](https://github.com/yfBong)，[@liuwuyao](https://github.com/liuwuyao)，[@Huixxi](https://github.com/Huixxi)，[@markparticle](https://github.com/markparticle)，[@blogg9ggg](https://github.com/Blogg9ggg).
