@@ -75,7 +75,7 @@ public:
 public:
     void init(int sockfd, const sockaddr_in &addr, char *, int, int, string user, string passwd, string sqlname);
     void close_conn(bool real_close = true);
-    void process();
+    void process(); // 主入口：解析 + 处理 + 生成响应
     bool read_once();
     bool write();
     sockaddr_in *get_address()
@@ -94,7 +94,7 @@ private:
     HTTP_CODE parse_request_line(char *text);
     HTTP_CODE parse_headers(char *text);
     HTTP_CODE parse_content(char *text);
-    HTTP_CODE do_request();
+    HTTP_CODE do_request();  // 解析请求目标文件的属性，判断文件是否存在、是否可读，并将文件映射到内存地址m_file_address处
     char *get_line() { return m_read_buf + m_start_line; };
     LINE_STATUS parse_line();
     void unmap();
@@ -122,15 +122,15 @@ private:
     int m_start_line;
     char m_write_buf[WRITE_BUFFER_SIZE];
     int m_write_idx;
-    CHECK_STATE m_check_state;
+    CHECK_STATE m_check_state; // 主状态机当前所处的状态
     METHOD m_method;
     char m_real_file[FILENAME_LEN];
-    char *m_url;
+    char *m_url;    //请求目标文件的文件名
     char *m_version;
     char *m_host;
-    long m_content_length;
-    bool m_linger;
-    char *m_file_address;
+    long m_content_length; // POST请求需要解析的请求体长度
+    bool m_linger;  //是否保持连接
+    char *m_file_address; //客户请求的目标文件被mmap到内存中的起始位置
     struct stat m_file_stat;
     struct iovec m_iv[2];
     int m_iv_count;

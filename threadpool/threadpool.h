@@ -72,7 +72,7 @@ bool threadpool<T>::append(T *request, int state)
     request->m_state = state;
     m_workqueue.push_back(request);
     m_queuelocker.unlock();
-    m_queuestat.post();
+    m_queuestat.post(); // 通知有新任务（唤醒等待的线程）
     return true;
 }
 template <typename T>
@@ -92,6 +92,7 @@ bool threadpool<T>::append_p(T *request)
 template <typename T>
 void *threadpool<T>::worker(void *arg)
 {
+    // 因为 pthread_create 要求线程函数必须是静态函数或全局函数，不能是类的普通成员函数。
     threadpool *pool = (threadpool *)arg;
     pool->run();
     return pool;
