@@ -687,9 +687,11 @@ bool http_conn::process_write(HTTP_CODE ret)
 }
 void http_conn::process()
 {
+    //解析http请求
     HTTP_CODE read_ret = process_read();
     if (read_ret == NO_REQUEST)
     {
+        //没有得到一个完整的请求，需要继续读取客户数据，直到得到一个完整的请求或者客户关闭连接
         modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
         return;
     }
