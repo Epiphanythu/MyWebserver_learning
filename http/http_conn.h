@@ -68,9 +68,9 @@ public:
     // 从状态机状态（行的读取状态）
     enum LINE_STATUS
     {
-        LINE_OK = 0,
-        LINE_BAD,
-        LINE_OPEN
+        LINE_OK = 0, // 读取到一个完整的行
+        LINE_BAD, // 行出错
+        LINE_OPEN // 行数据尚且不完整
     };
 
 public:
@@ -103,7 +103,7 @@ private:
     HTTP_CODE parse_content(char *text);
     HTTP_CODE do_request();  // 处理请求
     char *get_line() { return m_read_buf + m_start_line; };
-    å
+    
     LINE_STATUS parse_line();   // 从状态机，用于解析出一行内容，分析客户请求行、请求头、请求体的结束标志
     void unmap();
     // 响应相关
@@ -127,7 +127,7 @@ private:
     sockaddr_in m_address;
     // 读缓冲区
     char m_read_buf[READ_BUFFER_SIZE];
-    long m_read_idx;
+    long m_read_idx; // 当前已读取位置，m_read_buf中数据的最后一个字节的下一个位置
     long m_checked_idx; // 当前分析位置
     int m_start_line;   // 当前行的起始位置
     // 写缓冲区

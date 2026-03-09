@@ -169,15 +169,15 @@ http_conn::LINE_STATUS http_conn::parse_line()
         temp = m_read_buf[m_checked_idx];
         if (temp == '\r')
         {
-            if ((m_checked_idx + 1) == m_read_idx)
+            if ((m_checked_idx + 1) == m_read_idx) // 最后一个字符是\r，说明数据不完整，继续读取
                 return LINE_OPEN;
-            else if (m_read_buf[m_checked_idx + 1] == '\n')
+            else if (m_read_buf[m_checked_idx + 1] == '\n') // \r\n是行结束符
             {
                 m_read_buf[m_checked_idx++] = '\0';
                 m_read_buf[m_checked_idx++] = '\0';
                 return LINE_OK;
             }
-            return LINE_BAD;
+            return LINE_BAD; // \r后面不是\n，说明请求有语法错误
         }
         else if (temp == '\n')
         {
@@ -190,7 +190,7 @@ http_conn::LINE_STATUS http_conn::parse_line()
             return LINE_BAD;
         }
     }
-    return LINE_OPEN;
+    return LINE_OPEN; // 还没遇到换行符，数据不完整
 }
 
 //循环读取客户数据，直到无数据可读或对方关闭连接
@@ -219,6 +219,7 @@ bool http_conn::read_once()
     //ET读数据
     else
     {
+        // 循环读取数据，直到无数据可读
         while (true)
         {
             bytes_read = recv(m_sockfd, m_read_buf + m_read_idx, READ_BUFFER_SIZE - m_read_idx, 0);
@@ -338,7 +339,7 @@ http_conn::HTTP_CODE http_conn::parse_content(char *text)
     }
     return NO_REQUEST;
 }
-
+// 处理http请求
 http_conn::HTTP_CODE http_conn::process_read()
 {
     LINE_STATUS line_status = LINE_OK;
@@ -347,16 +348,22 @@ http_conn::HTTP_CODE http_conn::process_read()
 
     while ((m_check_state == CHECK_STATE_CONTENT && line_status == LINE_OK) || ((line_status = parse_line()) == LINE_OK))
     {
+        // 获取当前行的文本起始位置
         text = get_line();
-        m_start_line = m_checked_idx;
+
+        m_start_line = m_checked_idx;   // 更新下一行的起始位置
+
         LOG_INFO("%s", text);
+
         switch (m_check_state)
         {
+        // 解析请求行
         case CHECK_STATE_REQUESTLINE:
         {
             ret = parse_request_line(text);
             if (ret == BAD_REQUEST)
                 return BAD_REQUEST;
+            // 请求行解析成功，继续解析请求头
             break;
         }
         case CHECK_STATE_HEADER:
@@ -364,7 +371,7 @@ http_conn::HTTP_CODE http_conn::process_read()
             ret = parse_headers(text);
             if (ret == BAD_REQUEST)
                 return BAD_REQUEST;
-            else if (ret == GET_REQUEST)
+            else if (ret == GET_REQUEST) // 请求头解析完毕，且没有请求体，说明获得了一个完整的客户请求
             {
                 return do_request();
             }
