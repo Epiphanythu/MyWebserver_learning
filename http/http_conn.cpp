@@ -1,4 +1,4 @@
-#include "http_conn.h"
+﻿#include "http_conn.h"
 
 #include <mysql/mysql.h>
 #include <fstream>
@@ -21,7 +21,7 @@ void http_conn::initmysql_result(connection_pool *connPool)
 {
     //先从连接池中取一个连接
     MYSQL *mysql = NULL;
-    connectionRAII mysqlcon(&mysql, connPool);
+    connectionRAII mysqlcon(&mysql, connPool); // RAII技术，构造时获取连接，析构时释放连接
 
     //在user表中检索username，passwd数据，浏览器端输入
     if (mysql_query(mysql, "SELECT username,passwd FROM user"))
@@ -536,6 +536,7 @@ http_conn::HTTP_CODE http_conn::do_request()
     close(fd);
     return FILE_REQUEST;
 }
+//对内存映射区执行munmap操作
 void http_conn::unmap()
 {
     if (m_file_address)
@@ -544,6 +545,7 @@ void http_conn::unmap()
         m_file_address = 0;
     }
 }
+
 bool http_conn::write()
 {
     int temp = 0;
