@@ -2025,3 +2025,1105 @@ while (true) {
 > 面试常问：
 > "为什么 ET 模式要搭配非阻塞 socket？"
 > 答：因为 `recv` 在无数据时会阻塞，而 ET 不会再次通知，导致线程卡死。
+
+---
+
+## 十一、补充函数详解（初学者必读）
+
+以下是前面章节未详细讲解但同样重要的函数。
+
+---
+
+### 11.1 初始化函数 init()（无参版本）
+
+**位置**：http_conn.cpp 第 136 行
+
+**作用**：重置 http_conn 对象的所有内部状态，为处理新的 HTTP 请求做准备。
+
+```cpp
+//初始化新接受的连接
+//check_state默认为分析请求行状态
+void http_conn::init()
+{
+    mysql = NULL;
+    bytes_to_send = 0;
+    bytes_have_send = 0;
+    m_check_state = CHECK_STATE_REQUESTLINE;  // 初始状态：解析请求行
+    m_linger = false;                         // 默认不保持连接
+    m_method = GET;                           // 默认 GET 方法
+    m_url = 0;
+    m_version = 0;
+    m_content_length = 0;
+    m_host = 0;
+    m_start_line = 0;
+    m_checked_idx = 0;
+    m_read_idx = 0;
+    m_write_idx = 0;
+    cgi = 0;
+    m_state = 0;
+    timer_flag = 0;
+    improv = 0;
+
+    // 清空缓冲区
+    memset(m_read_buf, '\0', READ_BUFFER_SIZE);
+    memset(m_write_buf, '\0', WRITE_BUFFER_SIZE);
+    memset(m_real_file, '\0', FILENAME_LEN);
+}
+```
+
+**变量初始化说明表：**
+
+| 变量 | 初始值 | 含义 |
+|------|--------|------|
+| `m_check_state` | `CHECK_STATE_REQUESTLINE` | 主状态机初始状态 |
+| `m_linger` | `false` | 默认短连接 |
+| `m_method` | `GET` | 默认 GET 请求 |
+| `m_read_idx` | `0` | 读缓冲区已用位置 |
+| `m_checked_idx` | `0` | 已分析位置 |
+| `m_write_idx` | `0` | 写缓冲区已用位置 |
+| `m_content_length` | `0` | 正文长度 |
+| `cgi` | `0` | 非 POST 请求 |
+
+**何时调用？**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    init() 调用时机                               │
+└─────────────────────────────────────────────────────────────────┘
+
+1. 新连接到来时
+   init(sockfd, addr, ...)  →  内部调用 init()
+
+2. keep-alive 连接处理完一个请求后
+   write() 发送完成  →  if (m_linger) { init(); }
+
+3. 响应发送完毕，准备接收下一个请求时
+   write()  →  bytes_to_send == 0  →  init()
+```
+
+---
+
+### 11.2 初始化函数 init()（有参版本）
+
+**位置**：http_conn.cpp 第 113 行
+
+**作用**：当新连接到来时，由外部调用此函数初始化连接。
+
+```cpp
+//初始化连接,外部调用初始化套接字地址
+void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
+                     int close_log, string user, string passwd, string sqlname)
+{
+    m_sockfd = sockfd;            // 保存 socket 文件描述符
+    m_address = addr;             // 保存客户端地址
+
+    addfd(m_epollfd, sockfd, true, m_TRIGMode);  // 注册到 epoll
+    m_user_count++;               // 用户数 +1
+
+    //当浏览器出现连接重置时，可能是网站根目录出错或http响应格式出错或者访问的文件中内容完全为空
+    doc_root = root;              // 网站根目录（如 "./root"）
+    m_TRIGMode = TRIGMode;        // 触发模式（0=LT, 1=ET）
+    m_close_log = close_log;      // 是否关闭日志
+
+    strcpy(sql_user, user.c_str());      // 数据库用户名
+    strcpy(sql_passwd, passwd.c_str());  // 数据库密码
+    strcpy(sql_name, sqlname.c_str());   // 数据库名
+
+    init();  // 调用无参版本，重置内部状态
+}
+```
+
+**参数详解：**
+
+| 参数 | 类型 | 说明 | 示例值 |
+|------|------|------|--------|
+| `sockfd` | `int` | 客户端 socket 文件描述符 | `accept()` 返回值 |
+| `addr` | `sockaddr_in&` | 客户端地址结构体 | 包含 IP、端口 |
+| `root` | `char*` | 网站根目录 | `"./root"` |
+| `TRIGMode` | `int` | 触发模式 | `0`=LT, `1`=ET |
+| `close_log` | `int` | 是否关闭日志 | `0`=开启, `1`=关闭 |
+| `user` | `string` | 数据库用户名 | `"root"` |
+| `passwd` | `string` | 数据库密码 | `"root"` |
+| `sqlname` | `string` | 数据库名 | `"yourdb"` |
+
+**调用流程图：**
+
+```
+main.cpp 中的流程：
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ accept() 接受新连接                                              │
+│ 返回 connfd                                                      │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ users[connfd].init(connfd, client_address, root, mode, ...)     │
+│                                                                 │
+│ 做了什么：                                                        │
+│ 1. 保存 socket 和地址                                            │
+│ 2. 注册到 epoll（addfd）                                          │
+│ 3. 用户计数 +1                                                   │
+│ 4. 保存配置信息（根目录、触发模式、数据库信息）                      │
+│ 5. 调用 init() 重置内部状态                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11.3 关闭连接 close_conn()
+
+**位置**：http_conn.cpp 第 101 行
+
+**作用**：关闭客户端连接，清理资源。
+
+```cpp
+//关闭连接，关闭一个连接，客户总量减一
+void http_conn::close_conn(bool real_close)
+{
+    if (real_close && (m_sockfd != -1))
+    {
+        printf("close %d\n", m_sockfd);
+        removefd(m_epollfd, m_sockfd);  // 从 epoll 移除
+        m_sockfd = -1;                   // 标记为无效
+        m_user_count--;                  // 用户数 -1
+    }
+}
+```
+
+**参数说明：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `real_close` | `true` | 是否真正关闭（可以用于延迟关闭） |
+
+**关闭流程：**
+
+```
+close_conn() 调用
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 检查 real_close && m_sockfd != -1                               │
+│                                                                 │
+│ 如果条件满足：                                                    │
+│   1. removefd() - 从 epoll 删除，并 close socket                 │
+│   2. m_sockfd = -1 - 标记为已关闭                                │
+│   3. m_user_count-- - 用户计数减一                               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**何时调用？**
+
+```cpp
+// 1. 对方关闭连接时（在 WebServer.cpp 中）
+if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+    users[sockfd].close_conn();
+}
+
+// 2. 处理出错时
+if (!write_ret) {
+    close_conn();
+}
+
+// 3. 非 keep-alive 连接发送完成后
+if (!m_linger) {
+    return false;  // 在 write() 返回后，外部会调用 close_conn()
+}
+```
+
+---
+
+### 11.4 设置非阻塞 setnonblocking()
+
+**位置**：http_conn.cpp 第 51 行
+
+**作用**：将文件描述符设置为非阻塞模式。
+
+```cpp
+//对文件描述符设置非阻塞
+int setnonblocking(int fd)
+{
+    int old_option = fcntl(fd, F_GETFL);      // 获取当前标志
+    int new_option = old_option | O_NONBLOCK; // 添加非阻塞标志
+    fcntl(fd, F_SETFL, new_option);           // 设置新标志
+    return old_option;                         // 返回旧标志（方便恢复）
+}
+```
+
+**fcntl 函数详解：**
+
+```cpp
+#include <fcntl.h>
+
+// fcntl - 对文件描述符进行各种控制操作
+int fcntl(int fd, int cmd, ... /* arg */ );
+
+// 常用命令：
+// F_GETFL - 获取文件状态标志
+// F_SETFL - 设置文件状态标志
+
+// 文件状态标志：
+// O_NONBLOCK - 非阻塞模式
+// O_APPEND   - 追加模式
+// O_ASYNC    - 异步 I/O
+```
+
+**阻塞 vs 非阻塞对比：**
+
+```
+阻塞模式：
+┌─────────────────────────────────────────────────────────────────┐
+│ recv(fd, buf, size, 0);                                          │
+│                                                                 │
+│ 如果没有数据：                                                    │
+│   → 线程被挂起，等待数据到来                                       │
+│   → 线程什么都做不了                                               │
+│   → 其他连接也被阻塞                                               │
+└─────────────────────────────────────────────────────────────────┘
+
+非阻塞模式：
+┌─────────────────────────────────────────────────────────────────┐
+│ recv(fd, buf, size, 0);                                          │
+│                                                                 │
+│ 如果没有数据：                                                    │
+│   → 立即返回 -1                                                   │
+│   → errno = EAGAIN 或 EWOULDBLOCK                                │
+│   → 线程可以处理其他事情                                           │
+│   → 配合 epoll 使用，效率更高                                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**为什么 ET 模式必须用非阻塞？**
+
+```
+ET 模式 + 阻塞 socket = 死锁！
+
+场景：
+1. epoll 通知可读（ET 只通知一次）
+2. 循环读取数据...
+3. 数据读完，调用 recv()
+4. recv() 阻塞等待（因为 socket 是阻塞的）
+5. epoll 不会再通知（ET 只通知一次）
+6. 线程永远卡在 recv()！
+
+ET 模式 + 非阻塞 socket = 正确！
+
+场景：
+1. epoll 通知可读
+2. 循环读取数据...
+3. 数据读完，调用 recv()
+4. recv() 返回 -1，errno = EAGAIN
+5. 检测到 EAGAIN，跳出循环
+6. 完美！
+```
+
+---
+
+### 11.5 注册 epoll 事件 addfd()
+
+**位置**：http_conn.cpp 第 60 行
+
+**作用**：将文件描述符添加到 epoll 实例中，注册读事件。
+
+```cpp
+//将内核事件表注册读事件，ET模式，选择开启EPOLLONESHOT
+void addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
+{
+    epoll_event event;
+    event.data.fd = fd;
+
+    if (1 == TRIGMode)
+        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;  // ET 模式
+    else
+        event.events = EPOLLIN | EPOLLRDHUP;            // LT 模式
+
+    if (one_shot)
+        event.events |= EPOLLONESHOT;
+
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);  // 添加到 epoll
+    setnonblocking(fd);                              // 设置非阻塞
+}
+```
+
+**epoll 事件类型详解：**
+
+| 事件 | 说明 | 用途 |
+|------|------|------|
+| `EPOLLIN` | 可读事件 | socket 有数据可读 |
+| `EPOLLOUT` | 可写事件 | socket 可以发送数据 |
+| `EPOLLET` | 边缘触发模式 | 只在状态变化时通知 |
+| `EPOLLRDHUP` | 对方关闭连接 | 检测客户端断开 |
+| `EPOLLONESHOT` | 一次性事件 | 防止多线程竞争 |
+
+**EPOLLONESHOT 详解：**
+
+```
+没有 EPOLLONESHOT：
+┌─────────────────────────────────────────────────────────────────┐
+│ 线程1 正在处理 socket A 的请求                                    │
+│                                                                 │
+│ 此时 socket A 又来了新数据                                        │
+│ epoll 再次通知 socket A 可读                                      │
+│ 线程2 也开始处理 socket A                                         │
+│                                                                 │
+│ → 两个线程同时处理一个连接！                                       │
+│ → 数据竞争！混乱！                                                │
+└─────────────────────────────────────────────────────────────────┘
+
+使用 EPOLLONESHOT：
+┌─────────────────────────────────────────────────────────────────┐
+│ 线程1 正在处理 socket A 的请求                                    │
+│                                                                 │
+│ 即使 socket A 又来了新数据                                        │
+│ epoll 也不会再次通知                                              │
+│                                                                 │
+│ 线程1 处理完后，调用 modfd() 重置事件                              │
+│ epoll 才会再次通知                                                │
+│                                                                 │
+│ → 同一时刻只有一个线程处理一个连接                                 │
+│ → 安全！                                                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11.6 修改 epoll 事件 modfd()
+
+**位置**：http_conn.cpp 第 84 行
+
+**作用**：修改已注册的 epoll 事件（如从读事件改为写事件）。
+
+```cpp
+//将事件重置为EPOLLONESHOT
+void modfd(int epollfd, int fd, int ev, int TRIGMode)
+{
+    epoll_event event;
+    event.data.fd = fd;
+
+    if (1 == TRIGMode)
+        event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+    else
+        event.events = ev | EPOLLONESHOT | EPOLLRDHUP;
+
+    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);  // 修改事件
+}
+```
+
+**常见使用场景：**
+
+```cpp
+// 1. 请求不完整，继续等待数据
+modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+
+// 2. 响应生成完毕，准备发送
+modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+
+// 3. 发送缓冲区满，等待可写
+if (errno == EAGAIN) {
+    modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+}
+```
+
+**状态转换图：**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    epoll 事件状态转换                            │
+└─────────────────────────────────────────────────────────────────┘
+
+                    ┌──────────┐
+                    │  新连接   │
+                    └────┬─────┘
+                         │ addfd(EPOLLIN)
+                         ▼
+              ┌──────────────────────┐
+              │    EPOLLIN 状态      │◄─────────────────┐
+              │   （等待请求数据）    │                  │
+              └──────────┬───────────┘                  │
+                         │ 数据到来                      │
+                         ▼                              │
+              ┌──────────────────────┐                  │
+              │    read_once()       │                  │
+              │    process()         │                  │
+              └──────────┬───────────┘                  │
+                         │                              │
+            ┌────────────┴────────────┐                 │
+            │                         │                 │
+     请求不完整                  请求完整                │
+            │                         │                 │
+            │                         ▼                 │
+            │              ┌──────────────────────┐     │
+            │              │    EPOLLOUT 状态     │     │
+            │              │    （发送响应）       │     │
+            │              └──────────┬───────────┘     │
+            │                         │                 │
+            │                         ▼                 │
+            │              ┌──────────────────────┐     │
+            │              │      write()         │     │
+            │              └──────────┬───────────┘     │
+            │                         │                 │
+            │              ┌──────────┴───────────┐     │
+            │              │                      │     │
+            │         发送完成              keep-alive? │
+            │              │                      │     │
+            │              │                 是  │     │ 否
+            │              │                      ▼     ▼
+            │              │              ┌─────────┐ ┌─────────┐
+            │              │              │ init()  │ │关闭连接  │
+            │              │              │ 重置状态 │ │         │
+            │              │              └────┬────┘ └─────────┘
+            │              │                   │
+            └──────────────┴───────────────────┘
+                     modfd(EPOLLIN)
+```
+
+---
+
+### 11.7 从 epoll 移除 removefd()
+
+**位置**：http_conn.cpp 第 77 行
+
+**作用**：从 epoll 实例中删除文件描述符，并关闭 socket。
+
+```cpp
+//从内核时间表删除描述符
+void removefd(int epollfd, int fd)
+{
+    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);  // 从 epoll 删除
+    close(fd);                                  // 关闭文件描述符
+}
+```
+
+**epoll_ctl 操作类型：**
+
+| 操作 | 宏 | 说明 |
+|------|-----|------|
+| 添加 | `EPOLL_CTL_ADD` | 注册新的 fd 到 epoll |
+| 修改 | `EPOLL_CTL_MOD` | 修改已注册 fd 的事件 |
+| 删除 | `EPOLL_CTL_DEL` | 从 epoll 中删除 fd |
+
+---
+
+### 11.8 MySQL 初始化 initmysql_result()
+
+**位置**：http_conn.cpp 第 20 行
+
+**作用**：从数据库加载所有用户信息到内存（map）中，加速后续的登录验证。
+
+```cpp
+void http_conn::initmysql_result(connection_pool *connPool)
+{
+    //先从连接池中取一个连接
+    MYSQL *mysql = NULL;
+    connectionRAII mysqlcon(&mysql, connPool);  // RAII 自动管理连接
+
+    //在user表中检索username，passwd数据，浏览器端输入
+    if (mysql_query(mysql, "SELECT username,passwd FROM user"))
+    {
+        LOG_ERROR("SELECT error:%s\n", mysql_error(mysql));
+    }
+
+    //从表中检索完整的结果集
+    MYSQL_RES *result = mysql_store_result(mysql);
+
+    //返回结果集中的列数
+    int num_fields = mysql_num_fields(result);
+
+    //返回所有字段结构的数组
+    MYSQL_FIELD *fields = mysql_fetch_fields(result);
+
+    //从结果集中获取下一行，将对应的用户名和密码，存入map中
+    while (MYSQL_ROW row = mysql_fetch_row(result))
+    {
+        string temp1(row[0]);  // 用户名
+        string temp2(row[1]);  // 密码
+        users[temp1] = temp2;  // 存入 map
+    }
+}
+```
+
+**数据流程图：**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    用户数据加载流程                               │
+└─────────────────────────────────────────────────────────────────┘
+
+MySQL 数据库：
+┌─────────────────────────────────┐
+│         user 表                  │
+├─────────────┬───────────────────┤
+│  username   │      passwd       │
+├─────────────┼───────────────────┤
+│   admin     │     123456        │
+│   test      │     abc123        │
+│   user1     │     password      │
+└─────────────┴───────────────────┘
+            │
+            │ mysql_query("SELECT username,passwd FROM user")
+            ▼
+┌─────────────────────────────────┐
+│       MYSQL_RES 结果集           │
+│   row[0] = "admin"              │
+│   row[1] = "123456"             │
+└─────────────────────────────────┘
+            │
+            │ while (MYSQL_ROW row = mysql_fetch_row(result))
+            ▼
+内存中的 map<string, string> users：
+┌─────────────────────────────────┐
+│  users["admin"] = "123456"      │
+│  users["test"] = "abc123"       │
+│  users["user1"] = "password"    │
+└─────────────────────────────────┘
+            │
+            │ 后续登录验证直接查 map
+            ▼
+┌─────────────────────────────────┐
+│ if (users[name] == password)    │
+│     → 登录成功                   │
+└─────────────────────────────────┘
+```
+
+**为什么加载到内存？**
+
+```
+每次登录都查数据库：
+┌─────────────────────────────────────────────────────────────────┐
+│ 用户登录 → 连接数据库 → 执行 SQL → 获取结果 → 验证               │
+│                                                                 │
+│ 问题：                                                          │
+│ 1. 每次都要建立数据库连接（慢）                                   │
+│ 2. 执行 SQL 查询（慢）                                           │
+│ 3. 高并发时数据库压力大                                          │
+└─────────────────────────────────────────────────────────────────┘
+
+加载到内存后：
+┌─────────────────────────────────────────────────────────────────┐
+│ 启动时：加载所有用户到 map                                        │
+│                                                                 │
+│ 用户登录 → 直接查 map（O(1) 时间复杂度）→ 验证                    │
+│                                                                 │
+│ 优点：                                                          │
+│ 1. 不需要每次连接数据库                                          │
+│ 2. map 查找是 O(1)，非常快                                       │
+│ 3. 减轻数据库压力                                                │
+│                                                                 │
+│ 注意：注册新用户时要同时更新 map 和数据库                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**MySQL C API 关键函数：**
+
+| 函数 | 作用 |
+|------|------|
+| `mysql_query()` | 执行 SQL 语句 |
+| `mysql_store_result()` | 获取完整结果集 |
+| `mysql_num_fields()` | 获取列数 |
+| `mysql_fetch_fields()` | 获取字段信息 |
+| `mysql_fetch_row()` | 获取下一行数据 |
+| `mysql_error()` | 获取错误信息 |
+
+---
+
+### 11.9 解除 mmap 映射 unmap()
+
+**位置**：http_conn.cpp 第 539 行
+
+**作用**：解除文件的内存映射，释放资源。
+
+```cpp
+void http_conn::unmap()
+{
+    if (m_file_address)
+    {
+        munmap(m_file_address, m_file_stat.st_size);
+        m_file_address = 0;
+    }
+}
+```
+
+**mmap/munmap 配对使用：**
+
+```
+do_request() 中：
+┌─────────────────────────────────────────────────────────────────┐
+│ m_file_address = (char *)mmap(0, m_file_stat.st_size,           │
+│                                PROT_READ, MAP_PRIVATE, fd, 0);  │
+│                                                                 │
+│ → 文件被映射到内存                                               │
+│ → m_file_address 指向文件内容                                    │
+└─────────────────────────────────────────────────────────────────┘
+            │
+            │ 文件内容通过 writev() 发送
+            ▼
+write() 发送完成后：
+┌─────────────────────────────────────────────────────────────────┐
+│ unmap();                                                        │
+│                                                                 │
+│ → munmap(m_file_address, m_file_stat.st_size);                  │
+│ → 解除映射，释放资源                                             │
+│ → m_file_address = 0;                                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**何时调用 unmap()？**
+
+```cpp
+// 1. 响应发送完成后
+if (bytes_to_send <= 0)
+{
+    unmap();
+    ...
+}
+
+// 2. 发送出错时
+if (temp < 0)
+{
+    if (errno != EAGAIN)
+    {
+        unmap();
+        return false;
+    }
+}
+```
+
+---
+
+### 11.10 响应生成辅助函数详解
+
+这些函数用于构建 HTTP 响应报文。
+
+#### 11.10.1 add_response() - 核心格式化函数
+
+**位置**：http_conn.cpp 第 604 行
+
+```cpp
+bool http_conn::add_response(const char *format, ...)
+{
+    // 检查缓冲区是否已满
+    if (m_write_idx >= WRITE_BUFFER_SIZE)
+        return false;
+
+    va_list arg_list;                    // 可变参数列表
+    va_start(arg_list, format);          // 初始化 arg_list
+
+    // vsnprintf: 格式化输出到缓冲区
+    int len = vsnprintf(m_write_buf + m_write_idx,
+                        WRITE_BUFFER_SIZE - 1 - m_write_idx,
+                        format, arg_list);
+
+    // 检查是否超出缓冲区
+    if (len >= (WRITE_BUFFER_SIZE - 1 - m_write_idx))
+    {
+        va_end(arg_list);
+        return false;
+    }
+
+    m_write_idx += len;                  // 更新写入位置
+    va_end(arg_list);                    // 清理 arg_list
+
+    LOG_INFO("request:%s", m_write_buf); // 记录日志
+
+    return true;
+}
+```
+
+**可变参数详解：**
+
+```cpp
+// 可变参数函数的使用步骤：
+
+// 1. 声明 va_list 变量
+va_list arg_list;
+
+// 2. 用 va_start 初始化，指向 format 后的第一个参数
+va_start(arg_list, format);
+
+// 3. 用 va_arg 获取参数（或用 vsnprintf 一次性处理）
+int num = va_arg(arg_list, int);
+char *str = va_arg(arg_list, char*);
+
+// 4. 用 va_end 清理
+va_end(arg_list);
+```
+
+**使用示例：**
+
+```cpp
+// 调用 add_response
+add_response("HTTP/1.1 %d %s\r\n", 200, "OK");
+
+// 展开后：
+// format = "HTTP/1.1 %d %s\r\n"
+// arg_list 包含: 200, "OK"
+// vsnprintf 会生成: "HTTP/1.1 200 OK\r\n"
+```
+
+#### 11.10.2 add_status_line() - 添加状态行
+
+**位置**：http_conn.cpp 第 623 行
+
+```cpp
+bool http_conn::add_status_line(int status, const char *title)
+{
+    return add_response("%s %d %s\r\n", "HTTP/1.1", status, title);
+}
+```
+
+**HTTP 响应状态行格式：**
+
+```
+HTTP/1.1 200 OK\r\n
+├──────┤ ├┤ ├──┤
+  版本   状态码 原因短语
+
+常见状态码：
+200 OK                    - 成功
+400 Bad Request           - 请求格式错误
+403 Forbidden             - 无权限
+404 Not Found             - 资源不存在
+500 Internal Server Error - 服务器内部错误
+```
+
+#### 11.10.3 add_headers() - 添加响应头
+
+**位置**：http_conn.cpp 第 627 行
+
+```cpp
+bool http_conn::add_headers(int content_len)
+{
+    return add_content_length(content_len) &&
+           add_linger() &&
+           add_blank_line();
+}
+```
+
+**等价于依次调用：**
+
+```cpp
+add_content_length(content_len);  // Content-Length: xxx\r\n
+add_linger();                     // Connection: keep-alive/close\r\n
+add_blank_line();                 // \r\n（空行，表示头部结束）
+```
+
+#### 11.10.4 add_content_length() - 添加 Content-Length
+
+**位置**：http_conn.cpp 第 632 行
+
+```cpp
+bool http_conn::add_content_length(int content_len)
+{
+    return add_response("Content-Length:%d\r\n", content_len);
+}
+```
+
+#### 11.10.5 add_linger() - 添加 Connection 头
+
+**位置**：http_conn.cpp 第 640 行
+
+```cpp
+bool http_conn::add_linger()
+{
+    return add_response("Connection:%s\r\n",
+                        (m_linger == true) ? "keep-alive" : "close");
+}
+```
+
+**keep-alive vs close：**
+
+| 值 | 含义 | 连接行为 |
+|-----|------|----------|
+| `keep-alive` | 保持连接 | 发送完后不关闭，等待下一个请求 |
+| `close` | 关闭连接 | 发送完后立即关闭连接 |
+
+#### 11.10.6 add_blank_line() - 添加空行
+
+**位置**：http_conn.cpp 第 644 行
+
+```cpp
+bool http_conn::add_blank_line()
+{
+    return add_response("%s", "\r\n");
+}
+```
+
+**空行的作用：**
+
+```
+HTTP 响应格式：
+┌─────────────────────────────────────┐
+│ HTTP/1.1 200 OK\r\n                 │ ← 状态行
+│ Content-Length: 1234\r\n            │ ← 响应头
+│ Connection: keep-alive\r\n          │ ← 响应头
+│ \r\n                                │ ← 空行（分隔头部和正文）
+│ <html>...</html>                    │ ← 响应正文
+└─────────────────────────────────────┘
+
+空行是头部和正文的分界线！
+```
+
+#### 11.10.7 add_content() - 添加响应正文
+
+**位置**：http_conn.cpp 第 648 行
+
+```cpp
+bool http_conn::add_content(const char *content)
+{
+    return add_response("%s", content);
+}
+```
+
+**完整响应生成示例：**
+
+```cpp
+// 错误响应（如 404）
+add_status_line(404, "Not Found");
+add_headers(strlen("The requested file was not found"));
+add_content("The requested file was not found");
+
+// 生成的响应：
+/*
+HTTP/1.1 404 Not Found\r\n
+Content-Length: 34\r\n
+Connection: close\r\n
+\r\n
+The requested file was not found
+*/
+```
+
+---
+
+## 十二、全局变量和错误消息
+
+**位置**：http_conn.cpp 第 7-18 行
+
+```cpp
+//定义http响应的一些状态信息
+const char *ok_200_title = "OK";
+const char *error_400_title = "Bad Request";
+const char *error_400_form = "Your request has bad syntax or is inherently impossible to staisfy.\n";
+const char *error_403_title = "Forbidden";
+const char *error_403_form = "You do not have permission to get file form this server.\n";
+const char *error_404_title = "Not Found";
+const char *error_404_form = "The requested file was not found on this server.\n";
+const char *error_500_title = "Internal Error";
+const char *error_500_form = "There was an unusual problem serving the request file.\n";
+
+locker m_lock;              // 全局锁，用于多线程同步
+map<string, string> users;  // 全局用户表，存储用户名和密码
+```
+
+**错误消息用途表：**
+
+| 错误码 | title | form（正文） | 触发条件 |
+|--------|-------|-------------|----------|
+| 200 | OK | （文件内容） | 请求成功 |
+| 400 | Bad Request | 请求语法错误 | URL 格式不正确 |
+| 403 | Forbidden | 无权限 | 文件不可读 |
+| 404 | Not Found | 文件不存在 | stat() 失败 |
+| 500 | Internal Error | 服务器内部错误 | switch default |
+
+---
+
+## 十三、静态成员变量
+
+**位置**：http_conn.cpp 第 97-98 行
+
+```cpp
+int http_conn::m_user_count = 0;   // 当前用户数
+int http_conn::m_epollfd = -1;     // epoll 文件描述符
+```
+
+**为什么是静态变量？**
+
+```cpp
+// 静态成员变量属于类，不属于某个对象
+// 所有 http_conn 对象共享这两个变量
+
+class http_conn {
+public:
+    static int m_epollfd;      // 所有连接共享同一个 epoll
+    static int m_user_count;   // 统计总用户数
+private:
+    int m_sockfd;              // 每个连接有自己的 socket
+    ...
+};
+
+// 使用：
+http_conn conn1, conn2, conn3;
+
+conn1.m_epollfd == conn2.m_epollfd  // true，共享
+conn1.m_sockfd != conn2.m_sockfd    // true，各自独立
+
+conn1.m_user_count++;  // 所有对象看到的都是 +1 后的值
+```
+
+---
+
+## 十四、初学者常见问题 FAQ
+
+### Q1: 为什么读缓冲区大小是 2048 字节？
+
+```cpp
+static const int READ_BUFFER_SIZE = 2048;
+```
+
+**答**：
+- HTTP 请求头通常在 1KB 以内
+- 2048 字节（2KB）足够容纳大多数请求头
+- 如果请求头超过这个大小，会返回 false
+
+### Q2: m_read_idx、m_checked_idx、m_start_line 有什么区别？
+
+```
+m_read_buf:
+┌───────────────────────────────────────────────────────────────┐
+│ G E T / H T T P \r \n H o s t : ... \r \n \r \n              │
+└───────────────────────────────────────────────────────────────┘
+▲               ▲               ▲
+│               │               │
+m_start_line    m_checked_idx   m_read_idx
+(当前行起始)     (已分析位置)     (已读取位置)
+
+- m_read_idx: 下一次 recv() 写入的位置
+- m_checked_idx: parse_line() 分析到的位置
+- m_start_line: get_line() 返回的行起始位置
+```
+
+### Q3: 为什么要用 writev 而不是两次 write？
+
+```cpp
+// 方式1：两次 write
+write(sockfd, header, header_len);  // 系统调用 1
+write(sockfd, body, body_len);       // 系统调用 2
+
+// 方式2：一次 writev
+struct iovec iov[2] = {{header, header_len}, {body, body_len}};
+writev(sockfd, iov, 2);              // 系统调用 1
+
+// writev 只需要一次系统调用，效率更高！
+```
+
+### Q4: CGI 是什么？
+
+**答**：CGI（Common Gateway Interface）是一种让 Web 服务器执行外部程序的机制。
+
+在这个项目中：
+- `cgi = 0`：GET 请求，直接返回静态文件
+- `cgi = 1`：POST 请求，需要处理表单数据（登录/注册）
+
+虽然不是真正的 CGI（没有 fork 子进程），但借用了这个概念。
+
+### Q5: 为什么要在 parse_line 中把 \r\n 替换成 \0\0？
+
+```cpp
+// 替换前：
+// "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+
+// 替换后：
+// "GET / HTTP/1.1\0\0Host: localhost\0\0\0\0"
+
+// 好处：每一行都变成了独立的 C 字符串！
+// 可以直接用 strcasecmp、strpbrk 等字符串函数处理
+```
+
+---
+
+## 十五、调试技巧
+
+### 15.1 打印请求内容
+
+在 `process_read()` 中添加：
+
+```cpp
+printf("===== Request =====\n");
+printf("Method: %d\n", m_method);
+printf("URL: %s\n", m_url);
+printf("Version: %s\n", m_version);
+printf("Content-Length: %ld\n", m_content_length);
+printf("Keep-Alive: %d\n", m_linger);
+printf("===================\n");
+```
+
+### 15.2 打印响应内容
+
+在 `process_write()` 中添加：
+
+```cpp
+printf("===== Response =====\n");
+printf("%s\n", m_write_buf);
+printf("====================\n");
+```
+
+### 15.3 使用 telnet 测试
+
+```bash
+# 连接服务器
+telnet localhost 9006
+
+# 手动发送 HTTP 请求
+GET / HTTP/1.1
+Host: localhost
+
+（按两次回车）
+
+# 服务器会返回响应
+```
+
+### 15.4 使用 curl 测试
+
+```bash
+# GET 请求
+curl -v http://localhost:9006/
+
+# POST 请求（登录）
+curl -v -X POST -d "user=admin&passwd=123456" http://localhost:9006/2log.html
+```
+
+---
+
+## 十六、总结
+
+### 16.1 核心流程一句话总结
+
+```
+读取请求 → 状态机解析 → 处理请求（URL路由+mmap） → 生成响应 → 发送响应
+```
+
+### 16.2 关键技术点
+
+| 技术 | 作用 | 函数 |
+|------|------|------|
+| 状态机 | 解析 HTTP 请求 | `process_read()` |
+| mmap | 零拷贝读取文件 | `do_request()` |
+| writev | 分散写发送响应 | `write()` |
+| epoll | 事件驱动 | `addfd()`, `modfd()` |
+| 非阻塞 I/O | 配合 ET 模式 | `setnonblocking()` |
+
+### 16.3 文件结构
+
+```
+http_conn.h    - 类定义、枚举、成员变量声明
+http_conn.cpp  - 所有函数的实现
+README.md      - 本文档
+
+主要类：http_conn
+每个客户端连接对应一个 http_conn 对象
+```
+
+### 16.4 学习建议
+
+1. **先理解 HTTP 协议**：请求格式、响应格式、状态码
+2. **理解状态机模式**：为什么要分状态？状态如何转换？
+3. **理解 epoll**：LT vs ET，EPOLLONESHOT 的作用
+4. **理解零拷贝**：mmap 和 writev 为什么效率高？
+5. **动手调试**：添加打印语句，用 telnet/curl 测试
+
+---
+
+**文档版本**：v2.0
+**最后更新**：2026-03-10
+**适用代码**：TinyWebServer http 模块
