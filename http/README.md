@@ -578,111 +578,308 @@ http_conn::HTTP_CODE http_conn::process_read()
 
 **输入示例**：`"GET /index.html HTTP/1.1"`
 
+**HTTP 请求行格式：**
+```
+GET /index.html HTTP/1.1
+│       │          │
+│       │          └── HTTP版本
+│       └── URL
+└── 请求方法
+```
+
+#### 6.5.1 涉及的 C 字符串函数
+
+在解析之前，先了解代码中使用的字符串函数：
+
+| 函数 | 作用 | 示例 |
+|------|------|------|
+| `strpbrk(s, chars)` | 找到第一个在 chars 中的字符 | `strpbrk("hello", "aeiou")` → 指向 'e' |
+| `strspn(s, chars)` | 计算开头有多少字符在 chars 中 | `strspn("   abc", " ")` → 返回 3 |
+| `strcasecmp(a, b)` | 忽略大小写比较字符串 | `strcasecmp("GET", "get")` → 返回 0（相等） |
+| `strncasecmp(a, b, n)` | 忽略大小写比较前 n 个字符 | `strncasecmp("http://", "HTTP", 4)` → 返回 0 |
+| `strchr(s, c)` | 找到字符 c 第一次出现的位置 | `strchr("/index", '/')` → 指向第一个 '/' |
+| `strcat(dst, src)` | 拼接字符串 | `strcat(s, ".html")` → s 变成 "s.html" |
+| `strlen(s)` | 字符串长度 | `strlen("abc")` → 返回 3 |
+
+**strpbrk 详解：**
+
+```cpp
+char *strpbrk(const char *str, const char *accept);
+// 作用：在 str 中找到第一个出现在 accept 中的字符
+// 返回：找到则返回指向该字符的指针，没找到返回 NULL
+
+// 示例
+char text[] = "GET /index.html HTTP/1.1";
+char *p = strpbrk(text, " \t");  // 找第一个空格或制表符
+// p 指向 "GET" 后面的空格
+```
+
+**strspn 详解：**
+
+```cpp
+size_t strspn(const char *str, const char *accept);
+// 作用：计算 str 开头有多少个字符在 accept 中
+// 返回：匹配的字符数量
+
+// 示例
+strspn("   hello", " \t");  // 返回 3（开头有3个空格）
+strspn("abc123", "abc");    // 返回 3（abc都在"abc"中）
+```
+
+#### 6.5.2 源码逐行详解
+
 ```cpp
 //解析http请求行，获得请求方法，目标url及http版本号
 http_conn::HTTP_CODE http_conn::parse_request_line(char *text)
 {
-    // ===== 1. 提取方法（GET/POST）=====
+    // ========================================
+    // 第1步：提取请求方法（GET/POST）
+    // ========================================
+
     // strpbrk: 找到第一个空格或制表符的位置
+    // 输入: "GET /index.html HTTP/1.1"
+    //                ↑
+    //           m_url 指向这里
     m_url = strpbrk(text, " \t");
     if (!m_url)
     {
-        return BAD_REQUEST;  // 格式错误
+        return BAD_REQUEST;  // 没有空格，格式错误
     }
 
-    // 在空格处截断，text 就变成了方法名
-    *m_url++ = '\0';  // 先把空格改成 \0，然后 m_url 指针后移
-    char *method = text;  // 现在 text = "GET"
+    // 这一行做了两件事：
+    // 1. *m_url = '\0' - 把空格改成字符串结束符
+    // 2. m_url++ - 指针后移一位
+    *m_url++ = '\0';
 
-    // 判断是 GET 还是 POST
+    // 现在：
+    // text = "GET"（因为空格被改成了 \0）
+    // m_url 指向 "/index.html HTTP/1.1"
+
+    char *method = text;  // method = "GET"
+
+    // strcasecmp: 忽略大小写比较字符串
     if (strcasecmp(method, "GET") == 0)
         m_method = GET;
     else if (strcasecmp(method, "POST") == 0)
     {
         m_method = POST;
-        cgi = 1;  // 标记需要 CGI 处理（登录/注册）
+        cgi = 1;  // cgi标志位，表示需要解析请求体
     }
     else
-        return BAD_REQUEST;  // 不支持其他方法
+        return BAD_REQUEST;  // 仅支持GET和POST方法
 
-    // ===== 2. 提取 URL =====
+    // ========================================
+    // 第2步：提取 URL
+    // ========================================
+
     // strspn: 跳过空格和制表符
+    // 输入: "   /index.html HTTP/1.1"
+    //       ^^^
+    //       有3个空格，strspn 返回 3
+    // m_url += 3 后指向 "/index.html HTTP/1.1"
     m_url += strspn(m_url, " \t");
 
-    // ===== 3. 提取版本号 =====
-    // 找到下一个空格
+    // ========================================
+    // 第3步：提取 HTTP 版本号
+    // ========================================
+
+    // 再次用 strpbrk 找下一个空格
+    // 输入: "/index.html HTTP/1.1"
+    //                   ↑
+    //              m_version 指向这里
     m_version = strpbrk(m_url, " \t");
     if (!m_version)
         return BAD_REQUEST;
 
-    *m_version++ = '\0';  // 截断，现在 m_url = "/index.html"
-    m_version += strspn(m_version, " \t");  // 跳过空格
+    // 同样的技巧：截断并后移
+    *m_version++ = '\0';
 
-    // 检查版本号
+    // 现在：
+    // m_url = "/index.html"
+    // m_version 指向 " HTTP/1.1"
+
+    // 跳过空格
+    m_version += strspn(m_version, " \t");
+
+    // 检查版本号（仅支持 HTTP/1.1）
     if (strcasecmp(m_version, "HTTP/1.1") != 0)
         return BAD_REQUEST;
 
-    // ===== 4. 处理完整 URL =====
-    // 如果是 "http://localhost/index.html" 格式，提取 "/index.html"
+    // ========================================
+    // 第4步：处理完整 URL（带协议前缀）
+    // ========================================
+
+    // 如果 URL 是完整格式 "http://localhost/index.html"
+    // 需要提取出 "/index.html"
+
     if (strncasecmp(m_url, "http://", 7) == 0)
     {
-        m_url += 7;
-        m_url = strchr(m_url, '/');  // 找到第一个 /
+        m_url += 7;  // 跳过 "http://"
+        // 现在 m_url = "localhost/index.html"
+        m_url = strchr(m_url, '/');  // 找到第一个 '/'
+        // 现在 m_url = "/index.html"
     }
+
     if (strncasecmp(m_url, "https://", 8) == 0)
     {
         m_url += 8;
         m_url = strchr(m_url, '/');
     }
 
-    // ===== 5. 检查 URL 合法性 =====
+    // ========================================
+    // 第5步：检查 URL 合法性
+    // ========================================
+
+    // URL 必须以 '/' 开头
     if (!m_url || m_url[0] != '/')
         return BAD_REQUEST;
 
-    // 如果只访问 "/"，显示首页 judge.html
+    // 当 url 为 "/" 时，显示首页 judge.html
     if (strlen(m_url) == 1)
         strcat(m_url, "judge.html");
+    // 现在 m_url = "/judge.html"
 
-    // ===== 6. 状态转换 =====
+    // ========================================
+    // 第6步：状态转换
+    // ========================================
+
     m_check_state = CHECK_STATE_HEADER;  // 接下来解析头部
-    return NO_REQUEST;  // 请求还没处理完
+    return NO_REQUEST;  // 请求还没处理完，继续读取
 }
 ```
 
-**图解解析过程：**
+#### 6.5.3 完整流程图
 
 ```
-原始字符串: "GET /index.html HTTP/1.1"
-              │    │             │
-              │    │             └── m_version（最终）
-              │    └── m_url（最终）
-              └── method（最终）
-
-步骤1: strpbrk 找到第一个空格
-       "GET /index.html HTTP/1.1"
-           ↑
-       m_url 指向这里
-
-步骤2: 截断
-       "GET\0/index.html HTTP/1.1"
-            ↑
-       text = "GET"（方法）
-       m_url 指向 "/index.html HTTP/1.1"
-
-步骤3: strspn 跳过空格
-       m_url 指向 "/index.html HTTP/1.1"
-
-步骤4: strpbrk 找下一个空格
-       "/index.html HTTP/1.1"
-                   ↑
-              m_version 指向这里
-
-步骤5: 截断
-       最终结果:
-       method = "GET"
-       m_url = "/index.html"
-       m_version = "HTTP/1.1"
+输入: "GET /index.html HTTP/1.1"
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 第1步: strpbrk 找第一个空格              │
+│                                         │
+│ "GET /index.html HTTP/1.1"              │
+│     ↑                                   │
+│   m_url                                 │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 第2步: *m_url++ = '\0' 截断              │
+│                                         │
+│ "GET\0/index.html HTTP/1.1"             │
+│       ↑                                 │
+│     m_url (后移了)                       │
+│                                         │
+│ text = "GET"                            │
+│ m_url 指向 "/index.html HTTP/1.1"       │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 第3步: 判断请求方法                       │
+│                                         │
+│ strcasecmp(text, "GET") == 0            │
+│ m_method = GET                          │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 第4步: strspn 跳过空格                    │
+│                                         │
+│ m_url += strspn(m_url, " \t");          │
+│ m_url 指向 "/index.html HTTP/1.1"       │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 第5步: strpbrk 找下一个空格               │
+│                                         │
+│ "/index.html HTTP/1.1"                  │
+│             ↑                           │
+│         m_version                       │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 第6步: *m_version++ = '\0' 截断          │
+│                                         │
+│ m_url = "/index.html"                   │
+│ m_version = "HTTP/1.1"                  │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ 最终结果:                                │
+│                                         │
+│ m_method  = GET                         │
+│ m_url     = "/index.html"               │
+│ m_version = "HTTP/1.1"                  │
+│                                         │
+│ m_check_state = CHECK_STATE_HEADER      │
+└─────────────────────────────────────────┘
 ```
+
+#### 6.5.4 内存变化图解
+
+```
+原始缓冲区（text 指向这里）:
+┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐
+│ G │ E │ T │   │ / │ i │ n │ d │ e │ x │ . │ h │ t │ m │ l │   │ H │ T │...
+└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘
+  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17
+
+第一次截断后（*m_url++ = '\0'）:
+┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐
+│ G │ E │ T │ \0│ / │ i │ n │ d │ e │ x │ . │ h │ t │ m │ l │   │ H │ T │...
+└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘
+              ↑   ↑
+           \0  m_url 指向这里（位置4）
+
+此时:
+- text = "GET"（因为位置3是 \0）
+- m_url 指向 "/index.html HTTP/1.1"
+
+第二次截断后:
+┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐
+│ G │ E │ T │ \0│ / │ i │ n │ d │ e │ x │ . │ h │ t │ m │ l │ \0│ H │ T │...
+└───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘
+                                                          ↑
+                                                    m_version 指向这里
+
+最终:
+- text (method) = "GET"
+- m_url = "/index.html"
+- m_version = "HTTP/1.1"
+```
+
+#### 6.5.5 关键技巧总结
+
+**技巧1：用 \0 截断字符串**
+
+```cpp
+*m_url++ = '\0';
+// 等价于：
+*m_url = '\0';
+m_url = m_url + 1;
+```
+
+这样可以把一个长字符串"切分"成多个独立的 C 字符串。
+
+**技巧2：strspn 跳过空白字符**
+
+```cpp
+m_url += strspn(m_url, " \t");
+```
+
+跳过开头的所有空格和制表符。
+
+**技巧3：strpbrk 找分隔符**
+
+```cpp
+char *p = strpbrk(text, " \t");
+```
+
+找到第一个空格或制表符，用于分割字段。
 
 ---
 
@@ -791,67 +988,159 @@ m_string = "user=admin&passwd=123456"
 
 ### 6.8 处理请求 do_request()
 
-**位置**：http_conn.cpp 第 388 行
+**位置**：http_conn.cpp 第 411 行
 
-**作用**：根据解析结果处理请求，返回文件或验证登录
+**作用**：这是 HTTP 请求处理的**核心函数**，负责：
+1. URL 路由（根据 URL 决定返回什么内容）
+2. 登录/注册验证（POST 请求）
+3. 文件查找和权限检查
+4. mmap 映射文件到内存
+
+#### 6.8.1 函数整体流程
+
+```
+do_request()
+    │
+    ├─► 1. 拼接文件路径（doc_root + URL）
+    │
+    ├─► 2. 判断是否是 POST 请求（cgi == 1）
+    │       │
+    │       ├─► 登录验证（URL 以 /2 开头）
+    │       │
+    │       └─► 注册验证（URL 以 /3 开头）
+    │
+    ├─► 3. URL 路由（根据 URL 第二个字符）
+    │       │
+    │       ├─► /0xxx → 注册页面
+    │       ├─► /1xxx → 登录页面
+    │       ├─► /5xxx → 图片页面
+    │       ├─► /6xxx → 视频页面
+    │       └─► 其他 → 静态文件
+    │
+    ├─► 4. 检查文件（是否存在、权限、是否是目录）
+    │
+    └─► 5. mmap 映射文件到内存
+```
+
+#### 6.8.2 涉及的 C 函数
+
+| 函数 | 作用 | 示例 |
+|------|------|------|
+| `strcpy(dst, src)` | 复制字符串 | `strcpy(buf, "hello")` |
+| `strcat(dst, src)` | 拼接字符串 | `strcat(buf, ".html")` |
+| `strncpy(dst, src, n)` | 复制前 n 个字符 | `strncpy(buf, src, 10)` |
+| `strrchr(s, c)` | 从后往前找字符 | `strrchr("/a/b/c", '/')` → 指向 "/c" |
+| `stat(path, &st)` | 获取文件信息 | 检查文件是否存在、大小等 |
+| `open(path, flags)` | 打开文件 | `open("a.txt", O_RDONLY)` |
+| `mmap()` | 内存映射 | 将文件映射到内存 |
+| `mysql_query()` | 执行 SQL 语句 | 查询/插入数据库 |
+
+#### 6.8.3 源码逐行详解
 
 ```cpp
 http_conn::HTTP_CODE http_conn::do_request()
 {
-    // ===== 1. 拼接文件路径 =====
-    strcpy(m_real_file, doc_root);  // doc_root = "./root"
+    // ========================================
+    // 第1步：拼接文件路径
+    // ========================================
+
+    // doc_root = "./root"（网站根目录）
+    // m_real_file 将存储完整的文件路径
+    strcpy(m_real_file, doc_root);
     int len = strlen(doc_root);
+    // 现在 m_real_file = "./root"
 
     // 找到 URL 中最后一个 '/'
+    // 例如：m_url = "/2log.html"
+    // strrchr 返回指向最后一个 '/' 的指针
     const char *p = strrchr(m_url, '/');
+    // p 指向 "/2log.html" 中的 '/'
+    // p + 1 指向 "2log.html"
 
-    // ===== 2. 处理登录/注册（POST 请求）=====
-    // URL 格式: /2log.html（登录）或 /3register.html（注册）
+    // ========================================
+    // 第2步：处理登录/注册（POST 请求）
+    // ========================================
+
+    // cgi == 1 表示是 POST 请求
+    // *(p + 1) == '2' 表示登录
+    // *(p + 1) == '3' 表示注册
     if (cgi == 1 && (*(p + 1) == '2' || *(p + 1) == '3'))
     {
-        // 提取用户名和密码
-        // m_string 格式: "user=admin&passwd=123456"
+        // 提取实际要访问的文件名
+        // m_url = "/2log.html"
+        // m_url + 2 = "log.html"
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/");        // m_url_real = "/"
+        strcat(m_url_real, m_url + 2);  // m_url_real = "/log.html"
+        strncpy(m_real_file + len, m_url_real, FILENAME_LEN - len - 1);
+        // m_real_file = "./root/log.html"
+        free(m_url_real);
+
+        // ----- 提取用户名和密码 -----
+        // m_string 是 POST 请求的正文
+        // 格式: "user=admin&passwd=123456"
+        //       0123456789...
+        //       user= 是5个字符
+        //       &passwd= 是9个字符
+
         char name[100], password[100];
         int i;
 
-        // 提取用户名（从第5个字符开始，到 '&' 结束）
+        // 提取用户名
+        // 从 m_string[5] 开始（跳过 "user="）
+        // 到 '&' 结束
         for (i = 5; m_string[i] != '&'; ++i)
             name[i - 5] = m_string[i];
         name[i - 5] = '\0';
+        // 假设 m_string = "user=admin&passwd=123456"
+        // i 从 5 开始，m_string[5] = 'a'
+        // 循环到 m_string[10] = '&' 结束
+        // name = "admin"
 
-        // 提取密码（从 "&passwd=" 之后开始）
+        // 提取密码
+        // i 现在指向 '&'，i + 10 跳过 "&passwd="
         int j = 0;
         for (i = i + 10; m_string[i] != '\0'; ++i, ++j)
             password[j] = m_string[i];
         password[j] = '\0';
+        // password = "123456"
 
-        // 注册（URL 第二个字符是 '3'）
-        if (*(p + 1) == '3')
+        // ----- 注册处理 -----
+        if (*(p + 1) == '3')  // URL 以 '/3' 开头
         {
-            char sql_insert[200];
-            sprintf(sql_insert,
-                "INSERT INTO user(username, passwd) VALUES('%s', '%s')",
-                name, password);
+            // 构建 SQL 插入语句
+            char *sql_insert = (char *)malloc(sizeof(char) * 200);
+            strcpy(sql_insert, "INSERT INTO user(username, passwd) VALUES(");
+            strcat(sql_insert, "'");
+            strcat(sql_insert, name);
+            strcat(sql_insert, "', '");
+            strcat(sql_insert, password);
+            strcat(sql_insert, "')");
+            // sql_insert = "INSERT INTO user(username, passwd) VALUES('admin', '123456')"
 
             // 检查用户名是否已存在
-            if (users.find(name) == users.end())
+            // users 是一个 map<string, string>，存储所有用户
+            if (users.find(name) == users.end())  // 用户名不存在
             {
-                m_lock.lock();
-                int res = mysql_query(mysql, sql_insert);  // 插入数据库
-                users.insert(pair<string, string>(name, password));
-                m_lock.unlock();
+                m_lock.lock();  // 加锁（多线程安全）
+                int res = mysql_query(mysql, sql_insert);  // 执行 SQL
+                users.insert(pair<string, string>(name, password));  // 更新内存
+                m_lock.unlock();  // 解锁
 
-                if (!res)
+                if (!res)  // res == 0 表示成功
                     strcpy(m_url, "/log.html");  // 注册成功，跳转登录页
                 else
-                    strcpy(m_url, "/registerError.html");
+                    strcpy(m_url, "/registerError.html");  // 数据库错误
             }
             else
                 strcpy(m_url, "/registerError.html");  // 用户名已存在
+
+            free(sql_insert);
         }
-        // 登录（URL 第二个字符是 '2'）
-        else if (*(p + 1) == '2')
+        // ----- 登录处理 -----
+        else if (*(p + 1) == '2')  // URL 以 '/2' 开头
         {
+            // 验证用户名和密码
             if (users.find(name) != users.end() && users[name] == password)
                 strcpy(m_url, "/welcome.html");  // 登录成功
             else
@@ -859,74 +1148,398 @@ http_conn::HTTP_CODE http_conn::do_request()
         }
     }
 
-    // ===== 3. URL 路由 =====
-    // 根据URL第二个字符决定返回哪个页面
-    if (*(p + 1) == '0')
+    // ========================================
+    // 第3步：URL 路由
+    // ========================================
+
+    // 根据 URL 第二个字符决定返回哪个页面
+    // *(p + 1) 是 URL 中 '/' 后面的第一个字符
+
+    if (*(p + 1) == '0')  // /0xxx → 注册页面
     {
         char *m_url_real = (char *)malloc(sizeof(char) * 200);
         strcpy(m_url_real, "/register.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
         free(m_url_real);
+        // m_real_file = "./root/register.html"
     }
-    else if (*(p + 1) == '1')
+    else if (*(p + 1) == '1')  // /1xxx → 登录页面
     {
         char *m_url_real = (char *)malloc(sizeof(char) * 200);
         strcpy(m_url_real, "/log.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
         free(m_url_real);
+        // m_real_file = "./root/log.html"
     }
-    else if (*(p + 1) == '5')
+    else if (*(p + 1) == '5')  // /5xxx → 图片页面
     {
         char *m_url_real = (char *)malloc(sizeof(char) * 200);
         strcpy(m_url_real, "/picture.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
         free(m_url_real);
     }
-    else if (*(p + 1) == '6')
+    else if (*(p + 1) == '6')  // /6xxx → 视频页面
     {
         char *m_url_real = (char *)malloc(sizeof(char) * 200);
         strcpy(m_url_real, "/video.html");
         strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
         free(m_url_real);
     }
-    else
+    else if (*(p + 1) == '7')  // /7xxx → 粉丝页面
     {
-        // 普通静态文件
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/fans.html");
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+    else  // 其他 → 直接访问静态文件
+    {
         strncpy(m_real_file + len, m_url, FILENAME_LEN - len - 1);
+        // m_url = "/index.html"
+        // m_real_file = "./root/index.html"
     }
 
-    // ===== 4. 检查文件 =====
+    // ========================================
+    // 第4步：检查文件
+    // ========================================
+
+    // stat() 获取文件信息，失败返回 -1
     if (stat(m_real_file, &m_file_stat) < 0)
-        return NO_RESOURCE;  // 文件不存在
+        return NO_RESOURCE;  // 文件不存在（404）
 
+    // 检查文件权限
+    // S_IROTH: 其他用户是否有读权限
     if (!(m_file_stat.st_mode & S_IROTH))
-        return FORBIDDEN_REQUEST;  // 无读取权限
+        return FORBIDDEN_REQUEST;  // 无权限（403）
 
+    // 检查是否是目录
     if (S_ISDIR(m_file_stat.st_mode))
-        return BAD_REQUEST;  // 是目录，不是文件
+        return BAD_REQUEST;  // 是目录，不是文件（400）
 
-    // ===== 5. mmap 映射文件到内存 =====
+    // ========================================
+    // 第5步：mmap 映射文件到内存
+    // ========================================
+
+    // 以只读方式打开文件
     int fd = open(m_real_file, O_RDONLY);
+
+    // mmap: 将文件映射到内存
+    // 参数:
+    //   NULL (0): 让内核选择映射地址
+    //   m_file_stat.st_size: 映射的大小（文件大小）
+    //   PROT_READ: 只读权限
+    //   MAP_PRIVATE: 私有映射（修改不会影响原文件）
+    //   fd: 文件描述符
+    //   0: 偏移量（从文件开头开始）
     m_file_address = (char *)mmap(0, m_file_stat.st_size,
                                    PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
 
-    return FILE_REQUEST;
+    close(fd);  // 映射后可以关闭文件描述符
+
+    return FILE_REQUEST;  // 返回成功，准备发送文件
 }
 ```
 
-**URL 路由表：**
+#### 6.8.4 URL 路由详解
 
-| 请求 URL | 实际文件 | 功能 |
-|----------|----------|------|
-| `/` | `/judge.html` | 首页 |
-| `/0xxx` | `/register.html` | 注册页面 |
-| `/1xxx` | `/log.html` | 登录页面 |
-| `/2xxx` (POST) | 验证登录 | 登录验证 |
-| `/3xxx` (POST) | 注册用户 | 注册验证 |
-| `/5xxx` | `/picture.html` | 图片页面 |
-| `/6xxx` | `/video.html` | 视频页面 |
-| `/xxx` | `/xxx` | 静态文件 |
+**路由原理：**
+
+URL 格式为 `/Xxxx`，其中 `X` 是第一个字符（决定了路由）：
+
+```
+URL: /2log.html
+      ↑
+      这是第二个字符（p + 1 指向这里）
+```
+
+**路由表：**
+
+| 请求 URL | URL 第二字符 | 实际文件 | 功能 |
+|----------|-------------|----------|------|
+| `/` | 无 | `/judge.html` | 首页（在 parse_request_line 中处理） |
+| `/0xxx` | `'0'` | `/register.html` | 注册页面 |
+| `/1xxx` | `'1'` | `/log.html` | 登录页面 |
+| `/2xxx` (POST) | `'2'` | 登录验证 | 验证用户名密码 |
+| `/3xxx` (POST) | `'3'` | 注册验证 | 插入数据库 |
+| `/5xxx` | `'5'` | `/picture.html` | 图片页面 |
+| `/6xxx` | `'6'` | `/video.html` | 视频页面 |
+| `/7xxx` | `'7'` | `/fans.html` | 粉丝页面 |
+| `/xxx` | 其他 | `/xxx` | 直接访问静态文件 |
+
+**路由流程图：**
+
+```
+请求 URL: "/2log.html"
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ strrchr(m_url, '/') 找到最后一个 '/' │
+│ p 指向 "/2log.html" 中的 '/'         │
+│ p + 1 指向 "2log.html"               │
+│ *(p + 1) = '2'                       │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ 判断 *(p + 1) 的值                   │
+│                                     │
+│ '0' → 注册页面                       │
+│ '1' → 登录页面                       │
+│ '2' + POST → 登录验证                │
+│ '3' + POST → 注册验证                │
+│ '5' → 图片页面                       │
+│ '6' → 视频页面                       │
+│ 其他 → 静态文件                      │
+└─────────────────────────────────────┘
+```
+
+#### 6.8.5 登录/注册流程详解
+
+**POST 请求正文格式：**
+
+```
+m_string = "user=admin&passwd=123456"
+           ├─────┤ ├──────┤
+           5个字符  9个字符（包括&）
+
+解析用户名：
+位置: 0123456789...
+内容: user=admin&passwd=123456
+           ↑    ↑
+          [5]  [&]
+      从这里开始  到这里结束
+
+解析密码：
+位置: 01234567890123456789...
+内容: user=admin&passwd=123456
+                    ↑
+              [i+10]（跳过&passwd=）
+```
+
+**登录验证流程：**
+
+```
+用户提交登录表单
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ POST /2log.html                     │
+│ Body: user=admin&passwd=123456      │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ do_request() 解析                    │
+│ name = "admin"                      │
+│ password = "123456"                 │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ 查询 users map                       │
+│ users.find("admin") != end?         │
+│ users["admin"] == "123456"?         │
+└─────────────────────────────────────┘
+         │
+    ┌────┴────┐
+    │         │
+   成功       失败
+    │         │
+    ▼         ▼
+/welcome.html  /logError.html
+```
+
+**注册验证流程：**
+
+```
+用户提交注册表单
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ POST /3register.html                │
+│ Body: user=newuser&passwd=123456    │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ do_request() 解析                    │
+│ name = "newuser"                    │
+│ password = "123456"                 │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│ 检查用户名是否存在                    │
+│ users.find("newuser") == end?       │
+└─────────────────────────────────────┘
+         │
+    ┌────┴────┐
+    │         │
+  不存在     已存在
+    │         │
+    ▼         ▼
+┌─────────┐  /registerError.html
+│ 插入数据库│
+│ 更新 map │
+└────┬────┘
+     │
+     ▼
+/log.html（跳转登录页）
+```
+
+#### 6.8.6 mmap 内存映射详解
+
+**为什么用 mmap？**
+
+```
+传统方式读取文件并发送：
+┌─────────┐    read()    ┌─────────┐    write()   ┌─────────┐
+│  文件   │ ──────────► │ 用户缓冲区 │ ──────────► │  socket │
+└─────────┘             └─────────┘             └─────────┘
+                          拷贝1次
+
+mmap 方式：
+┌─────────┐    mmap()   ┌─────────┐   writev()  ┌─────────┐
+│  文件   │ ──────────► │ 内存映射  │ ──────────► │  socket │
+└─────────┘   (零拷贝)   └─────────┘             └─────────┘
+```
+
+**mmap 函数参数：**
+
+```cpp
+void *mmap(
+    void *addr,      // 映射起始地址（NULL 表示让系统选择）
+    size_t length,   // 映射长度（文件大小）
+    int prot,        // 内存保护标志
+    int flags,       // 映射类型
+    int fd,          // 文件描述符
+    off_t offset     // 文件偏移量
+);
+
+// 本项目中的调用：
+m_file_address = (char *)mmap(
+    0,                      // 让系统选择地址
+    m_file_stat.st_size,    // 文件大小
+    PROT_READ,              // 只读
+    MAP_PRIVATE,            // 私有映射（修改不影响原文件）
+    fd,                     // 文件描述符
+    0                       // 从文件开头开始
+);
+```
+
+**使用 mmap 后的发送流程：**
+
+```
+mmap 映射后:
+┌─────────────────────────────────────────────┐
+│              虚拟内存空间                     │
+│  ┌───────────────────────────────────────┐  │
+│  │ m_file_address                        │  │
+│  │   ↓                                   │  │
+│  │ <html><body>Hello</body></html>       │  │
+│  │ (文件内容直接映射到内存)                 │  │
+│  └───────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+                    │
+                    │ writev()
+                    ▼
+              发送到 socket
+```
+
+#### 6.8.7 文件检查流程
+
+```cpp
+// 1. 检查文件是否存在
+if (stat(m_real_file, &m_file_stat) < 0)
+    return NO_RESOURCE;  // 404
+
+// 2. 检查文件权限
+if (!(m_file_stat.st_mode & S_IROTH))
+    return FORBIDDEN_REQUEST;  // 403
+
+// 3. 检查是否是目录
+if (S_ISDIR(m_file_stat.st_mode))
+    return BAD_REQUEST;  // 400
+```
+
+**返回值说明：**
+
+| 返回值 | HTTP 状态码 | 含义 |
+|--------|-------------|------|
+| `FILE_REQUEST` | 200 | 文件请求成功 |
+| `NO_RESOURCE` | 404 | 文件不存在 |
+| `FORBIDDEN_REQUEST` | 403 | 无权限 |
+| `BAD_REQUEST` | 400 | 请求格式错误 |
+
+#### 6.8.8 完整流程图
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    do_request() 完整流程                         │
+└─────────────────────────────────────────────────────────────────┘
+
+输入: m_url = "/2log.html", m_string = "user=admin&passwd=123"
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第1步: 拼接文件路径                                              │
+│ strcpy(m_real_file, doc_root);  // "./root"                     │
+│ p = strrchr(m_url, '/');        // 指向 "/"                     │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第2步: 判断是否 POST 请求                                        │
+│ cgi == 1 && (*(p+1) == '2' || *(p+1) == '3')                    │
+│                                                                 │
+│ 如果是:                                                          │
+│   - 提取用户名和密码                                             │
+│   - '2' → 登录验证                                               │
+│   - '3' → 注册验证                                               │
+│   - 更新 m_url 为结果页面                                        │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第3步: URL 路由                                                  │
+│ 根据 *(p+1) 的值决定实际文件                                     │
+│                                                                 │
+│ '0' → /register.html                                            │
+│ '1' → /log.html                                                 │
+│ '5' → /picture.html                                             │
+│ '6' → /video.html                                               │
+│ 其他 → 直接使用 m_url                                            │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第4步: 检查文件                                                  │
+│ stat() → 文件是否存在?                                           │
+│ 权限检查 → 是否可读?                                             │
+│ 类型检查 → 是否是目录?                                           │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第5步: mmap 映射                                                 │
+│ fd = open(m_real_file, O_RDONLY);                               │
+│ m_file_address = mmap(...);                                     │
+│ close(fd);                                                      │
+│                                                                 │
+│ 返回 FILE_REQUEST                                               │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+    返回给 process_write() 生成响应
+```
+
+#### 6.8.9 关键点总结
+
+1. **URL 路由**：通过 URL 第二个字符决定返回内容
+2. **CGI 标志**：`cgi == 1` 表示需要处理 POST 正文
+3. **用户验证**：使用 map 存储用户信息，快速查找
+4. **线程安全**：数据库操作需要加锁
+5. **mmap**：零拷贝技术，提高文件传输效率
 
 ---
 
