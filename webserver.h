@@ -51,7 +51,7 @@ public:
     int m_close_log;
     int m_actormodel;
 
-    int m_pipefd[2];
+    int m_pipefd[2]; // 信号通知管道
     int m_epollfd;
     http_conn *users;
 
@@ -71,9 +71,9 @@ public:
 
     int m_listenfd;
     int m_OPT_LINGER;
-    int m_TRIGMode;
-    int m_LISTENTrigmode;
-    int m_CONNTrigmode;
+    int m_TRIGMode; // 总触发模式
+    int m_LISTENTrigmode; // listenfd触发模式
+    int m_CONNTrigmode; // connfd触发模式
 
     //定时器相关
     client_data *users_timer;

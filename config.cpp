@@ -35,9 +35,9 @@ Config::Config(){
 void Config::parse_arg(int argc, char*argv[]){
     int opt;
     const char *str = "p:l:m:o:s:t:c:a:";
-    while ((opt = getopt(argc, argv, str)) != -1)
+    while ((opt = getopt(argc, argv, str)) != -1) // 循环获取命令行参数，直到没有参数可获取为止
     {
-        switch (opt)
+        switch (opt) // 带值选项的值通过全局变量optarg获取，根据不同的选项进行相应的处理
         {
         case 'p':
         {

@@ -5,9 +5,9 @@ WebServer::WebServer()
     //http_conn类对象
     users = new http_conn[MAX_FD];
 
-    //root文件夹路径
+    //root文件夹路径，设置当前路径为根目录
     char server_path[200];
-    getcwd(server_path, 200);
+    getcwd(server_path, 200); // 写入当前目录
     char root[6] = "/root";
     m_root = (char *)malloc(strlen(server_path) + strlen(root) + 1);
     strcpy(m_root, server_path);
@@ -78,7 +78,7 @@ void WebServer::log_write()
     {
         //初始化日志
         if (1 == m_log_write)
-            Log::get_instance()->init("./ServerLog", m_close_log, 2000, 800000, 800);
+            Log::get_instance()->init("./ServerLog", m_close_log, 2000, 800000, 800); // 启用异步日志，设置阻塞队列大小为800
         else
             Log::get_instance()->init("./ServerLog", m_close_log, 2000, 800000, 0);
     }
@@ -106,11 +106,17 @@ void WebServer::eventListen()
     m_listenfd = socket(PF_INET, SOCK_STREAM, 0);
     assert(m_listenfd >= 0);
 
+    // struct linger {
+        // int l_onoff;   // 0 = 禁用 linger（默认行为），1 = 启用 linger
+        // int l_linger;  // linger 超时时间（秒），仅当 l_onoff=1 时有效
+    // };
+
     //优雅关闭连接
     if (0 == m_OPT_LINGER)
     {
         struct linger tmp = {0, 1};
-        setsockopt(m_listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+        // setsockopt() 用于设置套接字选项，这里设置 SO_LINGER 选项来控制 close() 的行为
+        setsockopt(m_listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp)); // 禁用 linger，默认行为，close() 会立即返回，底层会自动处理未发送完的数据
     }
     else if (1 == m_OPT_LINGER)
     {
@@ -120,27 +126,28 @@ void WebServer::eventListen()
 
     int ret = 0;
     struct sockaddr_in address;
-    bzero(&address, sizeof(address));
+    memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_ANY);
     address.sin_port = htons(m_port);
 
     int flag = 1;
-    setsockopt(m_listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
-    ret = bind(m_listenfd, (struct sockaddr *)&address, sizeof(address));
+    // SO_REUSEADDR 选项允许套接字绑定到一个已经在使用的地址上，这对于服务器重启时非常有用，可以避免 "Address already in use" 错误
+    setsockopt(m_listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag)); // 设置 SO_REUSEADDR 选项，允许地址重用，
+    ret = bind(m_listenfd, (struct sockaddr *)&address, sizeof(address)); // 绑定地址结构体到监听套接字
     assert(ret >= 0);
     ret = listen(m_listenfd, 5);
     assert(ret >= 0);
 
-    utils.init(TIMESLOT);
+    utils.init(TIMESLOT); // 初始化定时器工具类
 
     //epoll创建内核事件表
     epoll_event events[MAX_EVENT_NUMBER];
     m_epollfd = epoll_create(5);
     assert(m_epollfd != -1);
-
-    utils.addfd(m_epollfd, m_listenfd, false, m_LISTENTrigmode);
-    http_conn::m_epollfd = m_epollfd;
+    // 将监听套接字添加到 epoll 内核事件表中，设置触发模式（LT 或 ET），
+    utils.addfd(m_epollfd, m_listenfd, false, m_LISTENTrigmode); // 不启用 EPOLLONESHOT（监听 socket 不需要）
+    http_conn::m_epollfd = m_epollfd; // 将 epollfd 设为 http_conn 类的静态成员
 
     ret = socketpair(PF_UNIX, SOCK_STREAM, 0, m_pipefd);
     assert(ret != -1);

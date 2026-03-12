@@ -28,7 +28,8 @@ void sort_timer_lst::add_timer(util_timer *timer)
         head = tail = timer;
         return;
     }
-    if (timer->expire < head->expire)
+    if (timer->expire < head->expire) 
+    // 新的定时器超时时间更早，则将新的定时器插入链表头部，作为链表新的头结点
     {
         timer->next = head;
         head->prev = timer;
@@ -37,6 +38,7 @@ void sort_timer_lst::add_timer(util_timer *timer)
     }
     add_timer(timer, head);
 }
+
 void sort_timer_lst::adjust_timer(util_timer *timer)
 {
     if (!timer)
