@@ -2,6 +2,9 @@
 
 TinyWebServer
 ===============
+
+根据TinyWebserver ，制定的自学版本，增加了注释和md文档
+
 Linux下C++轻量级Web服务器，助力初学者快速实践网络编程，搭建属于自己的服务器.
 
 * 使用 **线程池 + 非阻塞socket + epoll(ET和LT均实现) + 事件处理(Reactor和模拟Proactor均实现)** 的并发模型
