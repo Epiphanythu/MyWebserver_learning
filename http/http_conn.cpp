@@ -16,7 +16,7 @@ const char *error_500_form = "There was an unusual problem serving the request f
 
 locker m_lock;
 map<string, string> users;
-
+// 从数据库中查询用户信息，存储在users中
 void http_conn::initmysql_result(connection_pool *connPool)
 {
     //先从连接池中取一个连接
@@ -51,7 +51,7 @@ void http_conn::initmysql_result(connection_pool *connPool)
 int setnonblocking(int fd)
 {
     int old_option = fcntl(fd, F_GETFL);
-    int new_option = old_option | O_NONBLOCK;
+    int new_option = old_option | O_NONBLOCK; // 设置非阻塞标志
     fcntl(fd, F_SETFL, new_option);
     return old_option;
 }
@@ -62,12 +62,12 @@ void addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
     epoll_event event;
     event.data.fd = fd;
 
-    if (1 == TRIGMode)
-        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+    if (1 == TRIGMode) // ET模式
+        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP; // EPOLLRDHUP：当对方关闭连接或者半关闭连接时，触发事件
     else
         event.events = EPOLLIN | EPOLLRDHUP;
 
-    if (one_shot)
+    if (one_shot) // 一次性事件，防止同一个通信被不同的线程处理
         event.events |= EPOLLONESHOT;
     epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
     setnonblocking(fd);
@@ -103,7 +103,7 @@ void http_conn::close_conn(bool real_close)
     if (real_close && (m_sockfd != -1))
     {
         printf("close %d\n", m_sockfd);
-        removefd(m_epollfd, m_sockfd);
+        removefd(m_epollfd, m_sockfd); // 将文件描述符从epoll对象中删除，并关闭套接字
         m_sockfd = -1;
         m_user_count--;
     }
@@ -116,7 +116,7 @@ void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMo
     m_sockfd = sockfd;
     m_address = addr;
 
-    addfd(m_epollfd, sockfd, true, m_TRIGMode);
+    addfd(m_epollfd, sockfd, true, m_TRIGMode); // 将新连接的文件描述符添加到epoll对象中，开启EPOLLONESHOT模式
     m_user_count++;
 
     //当浏览器出现连接重置时，可能是网站根目录出错或http响应格式出错或者访问的文件中内容完全为空
@@ -132,15 +132,14 @@ void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMo
 }
 
 //初始化新接受的连接
-//check_state默认为分析请求行状态
 void http_conn::init()
 {
     mysql = NULL;
     bytes_to_send = 0;
     bytes_have_send = 0;
-    m_check_state = CHECK_STATE_REQUESTLINE;
+    m_check_state = CHECK_STATE_REQUESTLINE; // 初始状态为分析请求行
     m_linger = false;
-    m_method = GET;
+    m_method = GET; // 默认请求方法为GET
     m_url = 0;
     m_version = 0;
     m_content_length = 0;
@@ -153,7 +152,7 @@ void http_conn::init()
     m_state = 0;
     timer_flag = 0;
     improv = 0;
-
+    // 初始化读写缓冲区和文件路径
     memset(m_read_buf, '\0', READ_BUFFER_SIZE);
     memset(m_write_buf, '\0', WRITE_BUFFER_SIZE);
     memset(m_real_file, '\0', FILENAME_LEN);
@@ -574,7 +573,7 @@ bool http_conn::write()
 
         bytes_have_send += temp;
         bytes_to_send -= temp;
-        if (bytes_have_send >= m_iv[0].iov_len)
+        if (bytes_have_send >= m_iv[0].iov_len)  // 响应报头已经发送完，继续发送文件内容
         {
             m_iv[0].iov_len = 0;
             m_iv[1].iov_base = m_file_address + (bytes_have_send - m_write_idx);
@@ -603,14 +602,17 @@ bool http_conn::write()
         }
     }
 }
+
 bool http_conn::add_response(const char *format, ...)
 {
     if (m_write_idx >= WRITE_BUFFER_SIZE)
         return false;
-    va_list arg_list;
+
+    va_list arg_list; // 定义可变参数列表
     va_start(arg_list, format);
+
     int len = vsnprintf(m_write_buf + m_write_idx, WRITE_BUFFER_SIZE - 1 - m_write_idx, format, arg_list);
-    if (len >= (WRITE_BUFFER_SIZE - 1 - m_write_idx))
+    if (len >= (WRITE_BUFFER_SIZE - 1 - m_write_idx))// 写入的内容超过缓冲区剩余空间，返回false
     {
         va_end(arg_list);
         return false;
@@ -622,10 +624,12 @@ bool http_conn::add_response(const char *format, ...)
 
     return true;
 }
+// 添加响应状态行、响应头、响应内容等
 bool http_conn::add_status_line(int status, const char *title)
 {
     return add_response("%s %d %s\r\n", "HTTP/1.1", status, title);
 }
+// 添加响应头
 bool http_conn::add_headers(int content_len)
 {
     return add_content_length(content_len) && add_linger() &&
@@ -682,12 +686,12 @@ bool http_conn::process_write(HTTP_CODE ret)
     case FILE_REQUEST:
     {
         add_status_line(200, ok_200_title);
-        if (m_file_stat.st_size != 0)
+        if (m_file_stat.st_size != 0) // 设置iovec
         {
             add_headers(m_file_stat.st_size);
-            m_iv[0].iov_base = m_write_buf;
+            m_iv[0].iov_base = m_write_buf; // 响应报头
             m_iv[0].iov_len = m_write_idx;
-            m_iv[1].iov_base = m_file_address;
+            m_iv[1].iov_base = m_file_address; // 文件内容
             m_iv[1].iov_len = m_file_stat.st_size;
             m_iv_count = 2;
             bytes_to_send = m_write_idx + m_file_stat.st_size;
