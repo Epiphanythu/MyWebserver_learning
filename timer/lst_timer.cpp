@@ -38,53 +38,54 @@ void sort_timer_lst::add_timer(util_timer *timer)
     }
     add_timer(timer, head);
 }
-
+// timer需要改大时调整
 void sort_timer_lst::adjust_timer(util_timer *timer)
 {
     if (!timer)
     {
         return;
     }
-    util_timer *tmp = timer->next;
-    if (!tmp || (timer->expire < tmp->expire))
+    util_timer *tmp = timer->next; // 当前节点的后一个
+    if (!tmp || (timer->expire < tmp->expire)) // 尾部 或者已经是最大的了
     {
         return;
     }
-    if (timer == head)
+    if (timer == head) // 先摘除头节点
     {
         head = head->next;
         head->prev = NULL;
         timer->next = NULL;
         add_timer(timer, head);
     }
-    else
+    else // 在中间，逻辑都是先摘出再插入
     {
         timer->prev->next = timer->next;
         timer->next->prev = timer->prev;
         add_timer(timer, timer->next);
     }
 }
+// 删除节点
 void sort_timer_lst::del_timer(util_timer *timer)
 {
     if (!timer)
     {
         return;
     }
-    if ((timer == head) && (timer == tail))
+    if ((timer == head) && (timer == tail)) // 只有一个节点
     {
         delete timer;
         head = NULL;
         tail = NULL;
         return;
     }
-    if (timer == head)
+    if (timer == head)  // 删除头
     {
         head = head->next;
         head->prev = NULL;
         delete timer;
         return;
     }
-    if (timer == tail)
+    if (timer == tail) // 删除尾
     {
         tail = tail->prev;
         tail->next = NULL;
@@ -95,6 +96,7 @@ void sort_timer_lst::del_timer(util_timer *timer)
     timer->next->prev = timer->prev;
     delete timer;
 }
+// 扫描已到期的定时器，执行回调函数
 void sort_timer_lst::tick()
 {
     if (!head)
@@ -102,7 +104,7 @@ void sort_timer_lst::tick()
         return;
     }
     
-    time_t cur = time(NULL);
+    time_t cur = time(NULL); // 获取当前时间
     util_timer *tmp = head;
     while (tmp)
     {
@@ -110,9 +112,9 @@ void sort_timer_lst::tick()
         {
             break;
         }
-        tmp->cb_func(tmp->user_data);
+        tmp->cb_func(tmp->user_data); // 超时回调
         head = tmp->next;
-        if (head)
+        if (head) // 更新头节点
         {
             head->prev = NULL;
         }
@@ -120,7 +122,7 @@ void sort_timer_lst::tick()
         tmp = head;
     }
 }
-
+// 实际插入
 void sort_timer_lst::add_timer(util_timer *timer, util_timer *lst_head)
 {
     util_timer *prev = lst_head;
@@ -128,6 +130,7 @@ void sort_timer_lst::add_timer(util_timer *timer, util_timer *lst_head)
     while (tmp)
     {
         if (timer->expire < tmp->expire)
+        // 插入到 prev 和tmp 之间
         {
             prev->next = timer;
             timer->next = tmp;
@@ -138,15 +141,15 @@ void sort_timer_lst::add_timer(util_timer *timer, util_timer *lst_head)
         prev = tmp;
         tmp = tmp->next;
     }
-    if (!tmp)
+    if (!tmp) // 走到尾部
     {
         prev->next = timer;
         timer->prev = prev;
         timer->next = NULL;
-        tail = timer;
+        tail = timer; // 更新尾部
     }
 }
-
+// 初始化时间槽
 void Utils::init(int timeslot)
 {
     m_TIMESLOT = timeslot;
@@ -157,7 +160,7 @@ int Utils::setnonblocking(int fd)
 {
     int old_option = fcntl(fd, F_GETFL);
     int new_option = old_option | O_NONBLOCK;
-    fcntl(fd, F_SETFL, new_option);
+    fcntl(fd, F_SETFL, new_option); // 写回
     return old_option;
 }
 
@@ -183,8 +186,8 @@ void Utils::sig_handler(int sig)
 {
     //为保证函数的可重入性，保留原来的errno
     int save_errno = errno;
-    int msg = sig;
-    send(u_pipefd[1], (char *)&msg, 1, 0);
+    int msg = sig; // 传递信号值
+    send(u_pipefd[1], (char *)&msg, 1, 0); // 将信号值发送到管道写端
     errno = save_errno;
 }
 

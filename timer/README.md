@@ -1305,6 +1305,28 @@ void Utils::addsig(int sig, void(handler)(int), bool restart)
 - 某个信号来了之后
 - 应该由哪个函数去处理
 
+先看函数签名：
+
+```cpp
+void Utils::addsig(int sig, void(handler)(int), bool restart)
+```
+
+这里的 `handler` 是“函数指针参数”，含义是“接收一个 `int` 信号编号、返回 `void` 的函数”。
+
+更常见的写法会写成：
+
+```cpp
+void (*handler)(int)
+```
+
+这两种在语义上是同一个意思。
+
+参数含义可以理解为：
+
+- `sig`：要注册的信号编号（比如 `SIGALRM`、`SIGTERM`）
+- `handler`：该信号对应的处理函数
+- `restart`：是否开启 `SA_RESTART` 行为
+
 #### 清空 `sigaction`
 
 ```cpp
@@ -1313,6 +1335,12 @@ memset(&sa, '\0', sizeof(sa));
 ```
 
 先把结构体清零，避免里面带有随机垃圾值。
+
+`struct sigaction` 里最关键的就是三块：
+
+- `sa_handler`：处理函数
+- `sa_mask`：处理函数执行期间，要额外屏蔽哪些信号
+- `sa_flags`：行为选项（例如 `SA_RESTART`）
 
 #### 指定处理函数
 
@@ -1328,6 +1356,8 @@ addsig(SIGALRM, sig_handler);
 
 那就表示 `SIGALRM` 到来时由 `sig_handler` 处理。
 
+也就是说，后续当内核投递 `SIGALRM` 时，进程会异步跳到 `sig_handler(int sig)` 执行。
+
 #### 设置 `SA_RESTART`
 
 ```cpp
@@ -1341,6 +1371,10 @@ if (restart)
 
 这样可以减少因为信号中断导致的异常情况。
 
+举个常见场景：线程阻塞在 `accept()` 或 `read()` 时收到信号，默认可能返回 `EINTR`；加了 `SA_RESTART` 后，很多这类阻塞调用会被内核自动续上，业务层不必到处写“被信号打断就重试”的分支。
+
+注意是“很多”而不是“全部”系统调用，仍然要有错误处理意识。
+
 #### 屏蔽所有信号
 
 ```cpp
@@ -1351,15 +1385,57 @@ sigfillset(&sa.sa_mask);
 
 这样做的目的是避免信号处理过程再次被别的信号打断，降低重入风险。
 
+这在当前项目里是偏保守、偏稳妥的配置。
+
+代价是：当处理函数正在执行时，其他信号会暂时延后投递（不丢失，只是延后）。
+
 #### 调用 `sigaction`
+
+`sigaction` 是 Linux/Unix 里“注册信号处理行为”的系统调用接口。
+
+函数原型可以写成：
+
+```cpp
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+```
+
+三个参数的意义：
+
+- `signum`：要操作的信号编号（例如 `SIGALRM`）
+- `act`：你要设置的新处理规则（传 `NULL` 表示不改）
+- `oldact`：用来接收这个信号之前的旧规则（传 `NULL` 表示不关心）
+
+返回值语义：
+
+- 返回 `0`：设置成功
+- 返回 `-1`：失败，同时设置 `errno`
+
+在当前代码里：
 
 ```cpp
 assert(sigaction(sig, &sa, NULL) != -1);
 ```
 
+含义就是“把 `sa` 这套新规则提交给内核，不需要取回旧规则”。
+
+为什么现代代码更推荐 `sigaction` 而不是旧的 `signal()`：
+
+- 行为更可控（可以明确配置 `sa_mask` 和 `sa_flags`）
+- 语义更稳定，跨平台/跨实现更一致
+- 能处理更复杂的信号场景（例如配合 `SA_RESTART`）
+
 真正把设置提交给内核。
 
 如果失败，就触发断言。
+
+完整执行链可以总结成一句话：
+
+`addsig()` 负责把“信号编号 -> 处理函数 + 行为策略（mask/flags）”这条映射注册到内核里，之后该信号到来就会按这套规则触发。
+
+在本项目中的实际用途是：
+
+- `addsig(SIGALRM, sig_handler)`：把定时信号接入“管道通知 -> epoll 统一处理”的链路
+- `addsig(SIGTERM, sig_handler)`：把终止信号同样转交主循环统一收敛处理
 
 ---
 
