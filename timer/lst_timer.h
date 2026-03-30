@@ -26,7 +26,7 @@
 
 class util_timer;
 
-struct client_data 
+struct client_data // 客户数据
 {
     sockaddr_in address;
     int sockfd;
@@ -61,8 +61,8 @@ public:
 private:
     void add_timer(util_timer *timer, util_timer *lst_head);
 
-    util_timer *head; // 链表头，头结点是链表的第一个定时器
-    util_timer *tail; //链表尾，尾结点是链表的最后一个定时器
+    util_timer *head; // 头哑节点
+    util_timer *tail; // 尾哑节点
 
 };
 
@@ -97,7 +97,7 @@ public:
     static int u_epollfd; // epoll文件描述符，通用事件源，后面称为统一事件源，所有socket上的事件都被注册到epoll上，epoll通过u_epollfd标识监听哪个epoll实例
     int m_TIMESLOT; //最小超时单位，单位是秒
 };
-
+// 声明定时器超时的回调函数
 void cb_func(client_data *user_data);
 
 #endif

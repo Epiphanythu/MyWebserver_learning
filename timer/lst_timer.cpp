@@ -3,37 +3,31 @@
 
 sort_timer_lst::sort_timer_lst()
 {
-    head = NULL;
-    tail = NULL;
+    // 创建头哑节点和尾哑节点
+    head = new util_timer();
+    tail = new util_timer();
+    head->next = tail;
+    tail->prev = head;
 }
 sort_timer_lst::~sort_timer_lst()
 {
-    util_timer *tmp = head;
-    while (tmp)
+    // 释放所有定时器节点
+    util_timer *tmp = head->next;
+    while (tmp != tail)
     {
-        head = tmp->next;
+        util_timer *next = tmp->next;
         delete tmp;
-        tmp = head;
+        tmp = next;
     }
+    // 释放哑节点
+    delete head;
+    delete tail;
 }
 
 void sort_timer_lst::add_timer(util_timer *timer)
 {
     if (!timer)
     {
-        return;
-    }
-    if (!head)
-    {
-        head = tail = timer;
-        return;
-    }
-    if (timer->expire < head->expire) 
-    // 新的定时器超时时间更早，则将新的定时器插入链表头部，作为链表新的头结点
-    {
-        timer->next = head;
-        head->prev = timer;
-        head = timer;
         return;
     }
     add_timer(timer, head);
@@ -46,23 +40,15 @@ void sort_timer_lst::adjust_timer(util_timer *timer)
         return;
     }
     util_timer *tmp = timer->next; // 当前节点的后一个
-    if (!tmp || (timer->expire < tmp->expire)) // 尾部 或者已经是最大的了
+    if (tmp == tail || (timer->expire < tmp->expire)) // 尾部 或者已经是最大的了
     {
         return;
     }
-    if (timer == head) // 先摘除头节点
-    {
-        head = head->next;
-        head->prev = NULL;
-        timer->next = NULL;
-        add_timer(timer, head);
-    }
-    else // 在中间，逻辑都是先摘出再插入
-    {
-        timer->prev->next = timer->next;
-        timer->next->prev = timer->prev;
-        add_timer(timer, timer->next);
-    }
+    // 从链表中移除定时器
+    timer->prev->next = timer->next;
+    timer->next->prev = timer->prev;
+    // 重新插入到合适位置
+    add_timer(timer, head);
 }
 // 删除节点
 void sort_timer_lst::del_timer(util_timer *timer)
@@ -71,27 +57,7 @@ void sort_timer_lst::del_timer(util_timer *timer)
     {
         return;
     }
-    if ((timer == head) && (timer == tail)) // 只有一个节点
-    {
-        delete timer;
-        head = NULL;
-        tail = NULL;
-        return;
-    }
-    if (timer == head)  // 删除头
-    {
-        head = head->next;
-        head->prev = NULL;
-        delete timer;
-        return;
-    }
-    if (timer == tail) // 删除尾
-    {
-        tail = tail->prev;
-        tail->next = NULL;
-        delete timer;
-        return;
-    }
+    // 从链表中移除定时器
     timer->prev->next = timer->next;
     timer->next->prev = timer->prev;
     delete timer;
@@ -99,27 +65,22 @@ void sort_timer_lst::del_timer(util_timer *timer)
 // 扫描已到期的定时器，执行回调函数
 void sort_timer_lst::tick()
 {
-    if (!head)
-    {
-        return;
-    }
-    
     time_t cur = time(NULL); // 获取当前时间
-    util_timer *tmp = head;
-    while (tmp)
+    util_timer *tmp = head->next;
+    while (tmp != tail)
     {
         if (cur < tmp->expire)
         {
             break;
         }
         tmp->cb_func(tmp->user_data); // 超时回调
-        head = tmp->next;
-        if (head) // 更新头节点
-        {
-            head->prev = NULL;
-        }
+        // 保存下一个节点
+        util_timer *next = tmp->next;
+        // 从链表中移除并释放
+        tmp->prev->next = next;
+        next->prev = tmp->prev;
         delete tmp;
-        tmp = head;
+        tmp = next;
     }
 }
 // 实际插入
@@ -127,7 +88,7 @@ void sort_timer_lst::add_timer(util_timer *timer, util_timer *lst_head)
 {
     util_timer *prev = lst_head;
     util_timer *tmp = prev->next;
-    while (tmp)
+    while (tmp != tail)
     {
         if (timer->expire < tmp->expire)
         // 插入到 prev 和tmp 之间
@@ -141,12 +102,12 @@ void sort_timer_lst::add_timer(util_timer *timer, util_timer *lst_head)
         prev = tmp;
         tmp = tmp->next;
     }
-    if (!tmp) // 走到尾部
+    if (tmp == tail) // 走到尾部
     {
         prev->next = timer;
         timer->prev = prev;
-        timer->next = NULL;
-        tail = timer; // 更新尾部
+        timer->next = tail;
+        tail->prev = timer;
     }
 }
 // 初始化时间槽
@@ -158,7 +119,7 @@ void Utils::init(int timeslot)
 //对文件描述符设置非阻塞
 int Utils::setnonblocking(int fd)
 {
-    int old_option = fcntl(fd, F_GETFL);
+    int old_option = fcntl(fd, F_GETFL); // 读取 fd 当前的文件状态标志
     int new_option = old_option | O_NONBLOCK;
     fcntl(fd, F_SETFL, new_option); // 写回
     return old_option;
@@ -176,6 +137,9 @@ void Utils::addfd(int epollfd, int fd, bool one_shot, int TRIGMode)
         event.events = EPOLLIN | EPOLLRDHUP;
 
     if (one_shot)
+        //  避免多线程竞争：一个连接同一时间只被一个线程处理
+        //  防止重复触发：处理完前再决定是否重新注册
+        //  适合线程池模型：工作线程处理完后主动"归还"连接
         event.events |= EPOLLONESHOT;
     epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
     setnonblocking(fd);
